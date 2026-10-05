@@ -1,0 +1,15 @@
+{
+  "name": "pulsenews",
+  "version": "1.0.0",
+  "private": true,
+  "description": "PulseNews editorial homepage powered by SerpApi",
+  "scripts": {
+    "start": "node server.js"
+  },
+  "engines": {
+    "node": ">=18"
+  },
+  "dependencies": {
+    "dotenv": "^18.0.5"
+  }
+}

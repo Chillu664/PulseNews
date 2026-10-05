@@ -1,0 +1,139 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <meta name="theme-color" content="#111111">
+  <meta name="description" content="PulseNews — Ghana and world news.">
+  <title>PulseNews — Ghana and the world, in focus</title>
+  <link rel="stylesheet" href="styles.css">
+  <script src="script.js" defer></script>
+</head>
+<body>
+  <a class="skip-link" href="#main">Skip to content</a>
+  <div class="edition-bar">
+    <div class="container edition-inner">
+      <p>Accra <span class="edition-divider">/</span> English edition</p>
+      <p class="demo-note"><span class="live-indicator"></span> LIVE NEWS · AUTOMATIC UPDATES</p>
+      <p id="today-date">Ghana edition</p>
+    </div>
+  </div>
+
+  <header class="site-header">
+    <div class="container masthead">
+      <button class="menu-toggle" type="button" aria-expanded="false" aria-controls="primary-nav" aria-label="Open navigation">
+        <span></span><span></span><span></span>
+      </button>
+      <a class="brand" href="#home" aria-label="PulseNews home"><span class="brand-pulse">P</span><span>Pulse<span class="brand-accent">News</span></span></a>
+      <p class="masthead-tagline">Ghana and the world, in focus.</p>
+      <button class="search-toggle" type="button" aria-label="Open search" aria-expanded="false" aria-controls="search-panel">
+        <svg viewBox="0 0 24 24" aria-hidden="true"><circle cx="10.8" cy="10.8" r="6.8"></circle><path d="m16 16 5 5"></path></svg>
+        <span>Search</span>
+      </button>
+    </div>
+    <nav class="primary-nav" id="primary-nav" aria-label="Main navigation">
+      <div class="container nav-inner">
+        <a class="active" href="#home">Home</a>
+        <a href="#ghana">Ghana</a>
+        <a href="#world">World</a>
+        <a href="#business">Business</a>
+        <a href="#sports">Sports</a>
+        <a href="#technology">Technology</a>
+      </div>
+    </nav>
+    <div class="search-panel" id="search-panel" hidden>
+      <div class="container search-inner">
+        <label class="sr-only" for="news-search">Search news</label>
+        <input id="news-search" type="search" placeholder="Search headlines, topics and sections">
+        <button type="button" id="clear-search">Clear</button>
+        <span class="search-hint">Search live headlines</span>
+      </div>
+    </div>
+  </header>
+  <p class="container search-status" id="search-status" aria-live="polite" hidden></p>
+
+  <main id="main">
+    <section class="breaking-bar" aria-label="Latest headline">
+      <div class="container breaking-inner">
+        <span class="breaking-label">Live</span>
+        <p id="breaking-headline">Loading the latest headlines…</p>
+        <a href="#latest">Latest <span aria-hidden="true">→</span></a>
+      </div>
+    </section>
+
+    <section class="container lead-section" id="home">
+      <div class="section-overline"><span>TOP STORY</span><span>FROM THE NEWS WIRE</span></div>
+      <div class="lead-story-container" id="lead-story" aria-live="polite">
+        <p class="live-placeholder">Loading the top headlines…</p>
+      </div>
+    </section>
+
+    <section class="container live-section" id="latest" aria-labelledby="live-news-title">
+      <div class="section-heading live-heading">
+        <div><p class="section-label">LATEST FROM OUR NEWS SOURCES</p><h2 id="live-news-title">Latest news</h2></div>
+        <p class="live-status" id="live-status" role="status">Connecting to SerpApi…</p>
+      </div>
+      <p class="feed-notice" id="feed-notice" role="status" hidden></p>
+      <div class="news-layout">
+        <div class="latest-main">
+          <div class="live-grid" id="live-headlines" aria-live="polite">
+            <p class="live-placeholder">Loading headlines from Ghana and international news sources…</p>
+          </div>
+        </div>
+        <aside class="most-read" aria-labelledby="top-headlines-title">
+          <div class="section-heading"><div><p class="section-label">LATEST BY CATEGORY</p><h2 id="top-headlines-title">Top headlines</h2></div></div>
+          <ol class="most-read-list" id="top-headlines">
+            <li class="loading-item">Loading headlines…</li>
+          </ol>
+        </aside>
+      </div>
+      <p class="live-disclaimer">Headlines, descriptions and images are provided by Google News results via SerpApi and their publishers. Image availability and publication details vary by source.</p>
+    </section>
+
+    <section class="topic-section" id="ghana">
+      <div class="container">
+        <div class="section-heading topic-heading"><div><p class="section-label">NEWS FROM HOME</p><h2>Ghana</h2></div><a class="section-more" href="#latest">More Ghana <span aria-hidden="true">↑</span></a></div>
+        <div class="topic-grid news-grid" id="category-ghana" aria-live="polite"><p class="live-placeholder">Loading Ghana news…</p></div>
+      </div>
+    </section>
+
+    <section class="topic-section alternate-section" id="world">
+      <div class="container">
+        <div class="section-heading topic-heading"><div><p class="section-label">A WIDER VIEW</p><h2>World</h2></div><a class="section-more" href="#latest">More world news <span aria-hidden="true">↑</span></a></div>
+        <div class="topic-grid news-grid" id="category-world" aria-live="polite"><p class="live-placeholder">Loading world news…</p></div>
+      </div>
+    </section>
+
+    <section class="topic-section" id="business">
+      <div class="container">
+        <div class="section-heading topic-heading"><div><p class="section-label">TRADE, IDEAS &amp; WORK</p><h2>Business</h2></div><a class="section-more" href="#latest">More business <span aria-hidden="true">↑</span></a></div>
+        <div class="topic-grid news-grid" id="category-business" aria-live="polite"><p class="live-placeholder">Loading business news…</p></div>
+      </div>
+    </section>
+
+    <section class="topic-section alternate-section" id="sports">
+      <div class="container">
+        <div class="section-heading topic-heading"><div><p class="section-label">ON AND OFF THE FIELD</p><h2>Sports</h2></div><a class="section-more" href="#latest">More sports <span aria-hidden="true">↑</span></a></div>
+        <div class="topic-grid news-grid" id="category-sports" aria-live="polite"><p class="live-placeholder">Loading sports news…</p></div>
+      </div>
+    </section>
+
+    <section class="topic-section" id="technology">
+      <div class="container">
+        <div class="section-heading topic-heading"><div><p class="section-label">IDEAS SHAPING TOMORROW</p><h2>Technology</h2></div><a class="section-more" href="#latest">More technology <span aria-hidden="true">↑</span></a></div>
+        <div class="topic-grid news-grid" id="category-technology" aria-live="polite"><p class="live-placeholder">Loading technology news…</p></div>
+      </div>
+    </section>
+  </main>
+
+  <footer class="site-footer" id="about">
+    <div class="container footer-main">
+      <div class="footer-about"><a class="brand footer-brand" href="#home"><span class="brand-pulse">P</span><span>Pulse<span class="brand-accent">News</span></span></a><p>Independent perspectives on Ghana and the world. Headlines link to their original publishers.</p><a class="footer-contact" href="mailto:hello@pulsenews.example">Contact the newsroom <span aria-hidden="true">→</span></a></div>
+      <div class="footer-column"><h2>Sections</h2><a href="#ghana">Ghana</a><a href="#world">World</a><a href="#business">Business</a><a href="#sports">Sports</a><a href="#technology">Technology</a></div>
+      <div class="footer-column"><h2>PulseNews</h2><a href="#about">About us</a><a href="#about">Editorial principles</a><a href="#about">Contact</a><a href="#about">Privacy</a></div>
+      <div class="footer-column footer-social"><h2>Follow PulseNews</h2><span>Instagram <small>Coming soon</small></span><span>LinkedIn <small>Coming soon</small></span><span>YouTube <small>Coming soon</small></span></div>
+    </div>
+    <div class="container footer-bottom"><span>© <span id="year"></span> PulseNews. All rights reserved.</span><span>Google News results via SerpApi · Headlines link to publishers.</span></div>
+  </footer>
+</body>
+</html>
