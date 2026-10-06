@@ -2,7 +2,7 @@
   "name": "pulsenews",
   "version": "1.0.0",
   "private": true,
-  "description": "PulseNews editorial homepage powered by SerpApi",
+  "description": "PulseNews editorial homepage powered by public news feeds",
   "scripts": {
     "start": "node server.js"
   },

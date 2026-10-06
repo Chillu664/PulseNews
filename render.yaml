@@ -1,0 +1,13 @@
+services:
+  - type: web
+    name: pulsenews
+    runtime: node
+    plan: free
+    buildCommand: npm ci
+    startCommand: npm start
+    healthCheckPath: /healthz
+    envVars:
+      - key: NEWS_PROVIDER
+        value: rss
+      - key: NEWS_REFRESH_INTERVAL_MS
+        value: "900000"

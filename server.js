@@ -5,9 +5,23 @@ const fs = require('node:fs');
 const path = require('node:path');
 const { isIP } = require('node:net');
 
-const HOST = '127.0.0.1';
+const HOST = '0.0.0.0';
 const PORT = Number(process.env.PORT) || 3000;
-const NEWS_REFRESH_INTERVAL_MS = Number(process.env.NEWS_REFRESH_INTERVAL_MS) || 10_800_000;
+const NEWS_REFRESH_INTERVAL_MS = Number(process.env.NEWS_REFRESH_INTERVAL_MS) || 900_000;
+const DEFAULT_FRONTEND_ORIGINS = [
+  'null',
+  'http://localhost:3000',
+  'http://127.0.0.1:3000',
+  'http://localhost:5500',
+  'http://127.0.0.1:5500'
+];
+const FRONTEND_ORIGINS = new Set(
+  (process.env.FRONTEND_ORIGINS
+    ? process.env.FRONTEND_ORIGINS.split(',')
+    : DEFAULT_FRONTEND_ORIGINS)
+    .map((origin) => origin.trim())
+    .filter(Boolean)
+);
 const REQUEST_TIMEOUT_MS = 12_000;
 const PUBLISHER_PAGE_TIMEOUT_MS = 6_000;
 const MAX_RESPONSE_BYTES = 3_000_000;
@@ -15,13 +29,19 @@ const MAX_PUBLISHER_PAGE_BYTES = 512_000;
 const MAX_PUBLISHER_IMAGE_REQUESTS = 5;
 const PUBLISHER_IMAGE_ARTICLE_COUNT = 4;
 const ROOT = __dirname;
-const API_KEY = process.env.SERPAPI_API_KEY?.trim();
+const USE_GNEWS = process.env.NEWS_PROVIDER?.trim().toLowerCase() === 'gnews';
+const API_KEY = [
+  process.env.GNEWS_API_KEY,
+  process.env.GNews_API_KEY,
+  process.env.gnews_api_key,
+  process.env.Gnews_api_key
+].find((value) => typeof value === 'string' && value.trim())?.trim();
 const categories = [
-  { id: 'ghana', label: 'Ghana', query: 'Ghana news', country: 'gh' },
-  { id: 'world', label: 'World', query: 'international news', country: 'us' },
-  { id: 'business', label: 'Business', query: 'business Ghana', country: 'gh' },
-  { id: 'sports', label: 'Sports', query: 'sports Ghana football', country: 'gh' },
-  { id: 'technology', label: 'Technology', query: 'technology Ghana', country: 'gh' }
+  { id: 'ghana', label: 'Ghana', query: 'Ghana news', rssQuery: 'Ghana news', country: 'gh' },
+  { id: 'world', label: 'World', query: 'international news', rssQuery: 'world news' },
+  { id: 'business', label: 'Business', query: 'business Ghana', rssQuery: 'Ghana business', country: 'gh' },
+  { id: 'sports', label: 'Sports', query: 'sports Ghana football', rssQuery: 'Ghana sports', country: 'gh' },
+  { id: 'technology', label: 'Technology', query: 'technology Ghana', rssQuery: 'Ghana technology', country: 'gh' }
 ];
 
 let cachedNews = null;
@@ -31,34 +51,86 @@ let activePublisherImageRequests = 0;
 const publisherImageRequestQueue = [];
 
 function createApiUrl(feed) {
-  const url = new URL('https://serpapi.com/search.json');
-  url.searchParams.set('engine', 'google_news');
+  const url = new URL('https://gnews.io/api/v4/search');
   url.searchParams.set('q', feed.query);
-  url.searchParams.set('hl', 'en');
-  url.searchParams.set('gl', feed.country);
-  url.searchParams.set('api_key', API_KEY);
+  url.searchParams.set('lang', 'en');
+  url.searchParams.set('max', '10');
+  url.searchParams.set('sortby', 'publishedAt');
+  if (feed.country) url.searchParams.set('country', feed.country);
+  url.searchParams.set('apikey', API_KEY);
   return url;
 }
 
-function createSummaryUrl(feed) {
-  const url = new URL('https://serpapi.com/search.json');
-  url.searchParams.set('engine', 'google');
-  url.searchParams.set('tbm', 'nws');
-  url.searchParams.set('q', feed.query);
-  url.searchParams.set('hl', 'en');
-  url.searchParams.set('gl', feed.country);
-  url.searchParams.set('num', '10');
-  url.searchParams.set('api_key', API_KEY);
+function createRssUrl(feed) {
+  const countryCode = feed.country === 'gh' ? 'GH' : 'US';
+  const language = feed.country === 'gh' ? 'en-GH' : 'en';
+  const url = new URL('https://news.google.com/rss/search');
+  url.searchParams.set('q', feed.rssQuery);
+  url.searchParams.set('hl', language);
+  url.searchParams.set('gl', countryCode);
+  url.searchParams.set('ceid', `${countryCode}:${language.split('-')[0]}`);
   return url;
 }
 
-function normalizeTitle(title) {
-  return String(title || '')
-    .normalize('NFKD')
-    .replace(/[\u0300-\u036f]/g, '')
-    .toLowerCase()
-    .replace(/[^a-z0-9]+/g, ' ')
-    .trim();
+function extractRssTag(item, tagName) {
+  const match = item.match(new RegExp(`<${tagName}\\b[^>]*>([\\s\\S]*?)<\\/${tagName}\\s*>`, 'i'));
+  if (!match) return '';
+  return decodeHtmlAttribute(match[1].replace(/<!\[CDATA\[([\s\S]*?)\]\]>/g, '$1').replace(/<[^>]*>/g, '').trim());
+}
+
+function parseRssArticles(xml, feed) {
+  const items = [...xml.matchAll(/<item\b[^>]*>([\s\S]*?)<\/item\s*>/gi)].slice(0, 10);
+  return items.map((match) => {
+    const item = match[1];
+    const url = extractRssTag(item, 'link');
+    const title = extractRssTag(item, 'title');
+    const publishedAt = extractRssTag(item, 'pubDate');
+    const source = extractRssTag(item, 'source');
+    return normalizeArticle({
+      title,
+      description: '',
+      image: null,
+      source: source || (() => {
+        try {
+          return new URL(url).hostname.replace(/^www\./, '');
+        } catch {
+          return 'News source';
+        }
+      })(),
+      url,
+      publishedAt
+    }, feed);
+  }).filter(Boolean);
+}
+
+async function fetchRssCategory(feed) {
+  const response = await fetch(createRssUrl(feed), {
+    signal: AbortSignal.timeout(REQUEST_TIMEOUT_MS),
+    headers: { Accept: 'application/rss+xml, application/xml, text/xml', 'User-Agent': 'PulseNews/1.0' }
+  });
+  if (!response.ok) throw new Error(`Google News RSS returned HTTP ${response.status}`);
+
+  const xml = await response.text();
+  if (Buffer.byteLength(xml, 'utf8') > MAX_RESPONSE_BYTES) {
+    throw new Error('Google News RSS response exceeded the allowed size.');
+  }
+  const articles = parseRssArticles(xml, feed);
+  if (!articles.length) throw new Error('Google News RSS returned no usable articles.');
+  return articles;
+}
+
+async function fetchCategoryWithFallback(feed) {
+  if (USE_GNEWS && API_KEY) {
+    try {
+      const articles = await fetchCategoryWithImages(feed);
+      if (!articles.length) throw new Error('GNews returned no articles.');
+      return { articles, provider: 'GNews' };
+    } catch (error) {
+      const message = redactApiKey(error instanceof Error ? error.message : 'Unknown GNews error');
+      console.warn(`GNews request failed (${feed.label}); falling back to Google News RSS: ${message}`);
+    }
+  }
+  return { articles: await fetchRssCategory(feed), provider: 'Google News RSS' };
 }
 
 function normalizeStoryUrl(value) {
@@ -220,48 +292,6 @@ async function upgradePublisherImages(feed, articles) {
   return articles.map((article) => upgraded.get(article.id) || article);
 }
 
-async function fetchSummaries(feed) {
-  const response = await fetch(createSummaryUrl(feed), {
-    signal: AbortSignal.timeout(REQUEST_TIMEOUT_MS),
-    headers: { Accept: 'application/json', 'User-Agent': 'PulseNews/1.0' }
-  });
-  if (!response.ok) {
-    throw new Error(`SerpApi summary search returned HTTP ${response.status}.`);
-  }
-
-  const body = await response.text();
-  if (Buffer.byteLength(body, 'utf8') > MAX_RESPONSE_BYTES) {
-    throw new Error('SerpApi summary response exceeded the allowed size.');
-  }
-  let result;
-  try {
-    result = JSON.parse(body);
-  } catch {
-    throw new Error('SerpApi returned an unreadable summary response.');
-  }
-  if (typeof result.error === 'string') throw new Error(getProviderError(result, response.status));
-  return Array.isArray(result.news_results) ? result.news_results : [];
-}
-
-function matchSummaries(articles, summaries) {
-  const byUrl = new Map();
-  const byTitle = new Map();
-  summaries.forEach((item) => {
-    const summary = typeof item.snippet === 'string' ? item.snippet.trim() : '';
-    if (!summary) return;
-    const url = normalizeStoryUrl(item.link);
-    const title = normalizeTitle(item.title);
-    if (url && !byUrl.has(url)) byUrl.set(url, summary);
-    if (title && !byTitle.has(title)) byTitle.set(title, summary);
-  });
-
-  return articles.map((article) => {
-    const summary = byUrl.get(normalizeStoryUrl(article.url)) ||
-      byTitle.get(normalizeTitle(article.title));
-    return summary ? { ...article, description: summary.slice(0, 1000) } : article;
-  });
-}
-
 function normalizeArticle(article, feed) {
   if (!article || typeof article.title !== 'string' || typeof article.url !== 'string') return null;
 
@@ -305,23 +335,29 @@ function normalizeArticle(article, feed) {
 }
 
 function redactApiKey(value) {
+  if (!API_KEY) return String(value);
   return String(value)
     .replaceAll(API_KEY, '[redacted]')
     .replaceAll(encodeURIComponent(API_KEY), '[redacted]');
 }
 
 function getProviderError(body, status) {
-  const providerMessage = typeof body?.error === 'string' ? body.error : '';
+  const providerMessage = typeof body?.error === 'string'
+    ? body.error
+    : Array.isArray(body?.errors)
+      ? body.errors.filter((error) => typeof error === 'string').join('; ')
+      : '';
   const safeMessage = redactApiKey(providerMessage);
 
-  if (/invalid api key|api key.*invalid|unauthorized|authentication/i.test(safeMessage) || status === 401) {
-    return 'SerpApi rejected the API key. Copy the private API key from your SerpApi dashboard into SERPAPI_API_KEY in .env, then restart the server.';
+  if (/invalid api key|api key.*invalid|unauthorized|authentication/i.test(safeMessage) ||
+    status === 401 || status === 403) {
+    return 'GNews rejected the API key. Add a valid GNews API key as GNEWS_API_KEY in .env or your hosting environment, then restart or redeploy the server.';
   }
   if (/limit|quota|too many requests|run out of searches/i.test(safeMessage) || status === 429) {
-    return 'SerpApi search limit reached. Check your account quota and plan.';
+    return 'GNews request limit reached. Check your GNews account quota and plan.';
   }
-  if (safeMessage) return `SerpApi error: ${safeMessage.slice(0, 400)}`;
-  return `SerpApi returned HTTP ${status}. Check your API key, account quota, and request parameters.`;
+  if (safeMessage) return `GNews error: ${safeMessage.slice(0, 400)}`;
+  return `GNews returned HTTP ${status}. Check your API key, account quota, and request parameters.`;
 }
 
 async function fetchCategory(feed) {
@@ -332,7 +368,7 @@ async function fetchCategory(feed) {
   if (!response.ok) {
     const errorBody = await response.text();
     if (Buffer.byteLength(errorBody, 'utf8') > MAX_RESPONSE_BYTES) {
-      throw new Error(`SerpApi returned HTTP ${response.status} with an oversized error response.`);
+      throw new Error(`GNews returned HTTP ${response.status} with an oversized error response.`);
     }
     let parsedError;
     try {
@@ -345,79 +381,77 @@ async function fetchCategory(feed) {
 
   const body = await response.text();
   if (Buffer.byteLength(body, 'utf8') > MAX_RESPONSE_BYTES) {
-    throw new Error('SerpApi response exceeded the allowed size.');
+    throw new Error('GNews response exceeded the allowed size.');
   }
   let result;
   try {
     result = JSON.parse(body);
   } catch {
-    throw new Error('SerpApi returned an unreadable response.');
+    throw new Error('GNews returned an unreadable response.');
   }
 
-  if (typeof result.error === 'string') {
+  if (result.status === 'error' || typeof result.error === 'string' || Array.isArray(result.errors)) {
     throw new Error(getProviderError(result, response.status));
   }
-  if (!Array.isArray(result.news_results)) {
-    throw new Error('SerpApi response did not contain a news_results list.');
+  if (!Array.isArray(result.articles)) {
+    throw new Error('GNews response did not contain an articles list.');
   }
-  return result.news_results.map((article) => normalizeArticle({
+  return result.articles.map((article) => normalizeArticle({
     title: article.title,
-    description: article.snippet || '',
-    image: article.thumbnail,
+    description: article.description || '',
+    image: article.image,
     source: article.source,
-    url: article.link,
-    publishedAt: article.published_at || article.iso_date || article.date
+    url: article.url,
+    publishedAt: article.publishedAt
   }, feed)).filter(Boolean);
 }
 
-async function fetchCategoryWithSummaries(feed) {
-  const [articles, summaryResults] = await Promise.all([
-    fetchCategory(feed),
-    fetchSummaries(feed).catch((error) => {
-      const message = redactApiKey(error instanceof Error ? error.message : 'Unknown summary search error');
-      console.error(`SerpApi summary search failed (${feed.label}): ${message}`);
-      return null;
-    })
-  ]);
-  const enrichedArticles = summaryResults ? matchSummaries(articles, summaryResults) : articles;
-  return upgradePublisherImages(feed, enrichedArticles);
+async function fetchCategoryWithImages(feed) {
+  const articles = await fetchCategory(feed);
+  return upgradePublisherImages(feed, articles);
 }
 
 async function refreshNews() {
-  if (!API_KEY) {
-    throw new Error('SerpApi is not configured. Add SERPAPI_API_KEY=your_key_here to the .env file, then restart the server.');
-  }
-
-  const results = await Promise.allSettled(categories.map(fetchCategoryWithSummaries));
+  const results = await Promise.allSettled(categories.map(fetchCategoryWithFallback));
   const nextCategories = { ...(cachedNews?.categories || {}) };
   const errors = [];
+  const categoryErrors = {};
+  const providers = new Set();
 
   results.forEach((result, index) => {
     const feed = categories[index];
     if (result.status === 'fulfilled') {
       nextCategories[feed.id] = {
         updatedAt: new Date().toISOString(),
-        articles: result.value
+        provider: result.value.provider,
+        articles: result.value.articles
       };
+      providers.add(result.value.provider);
       return;
     }
 
-    const message = redactApiKey(result.reason instanceof Error ? result.reason.message : 'Unknown news API error');
-    console.error(`SerpApi request failed (${feed.label}): ${message}`);
+    const message = redactApiKey(result.reason instanceof Error ? result.reason.message : 'Unknown news feed error');
+    console.error(`News request failed (${feed.label}): ${message}`);
+    categoryErrors[feed.id] = message;
     errors.push(`${feed.label}: ${message}`);
   });
 
+  categories.forEach((feed) => {
+    if (nextCategories[feed.id]?.provider) providers.add(nextCategories[feed.id].provider);
+  });
   const articles = categories
     .flatMap((feed) => nextCategories[feed.id]?.articles || [])
     .sort((a, b) => Date.parse(b.publishedAt || 0) - Date.parse(a.publishedAt || 0));
   if (!articles.length) {
-    throw new Error(errors[0] || 'SerpApi returned no news. Try again later.');
+    throw new Error(errors[0] || 'News feeds returned no news. Try again later.');
   }
 
   cachedNews = {
     updatedAt: new Date().toISOString(),
     nextRefreshMs: NEWS_REFRESH_INTERVAL_MS,
+    provider: [...providers].join(' + ') || 'News feeds',
     warning: errors.length ? `Some categories could not be refreshed: ${errors.join('; ')}` : '',
+    categoryErrors,
     categories: nextCategories,
     articles
   };
@@ -425,7 +459,6 @@ async function refreshNews() {
 }
 
 async function getNews() {
-  if (!API_KEY) return refreshNews();
   if (cachedNews && Date.now() - lastFetchAt < NEWS_REFRESH_INTERVAL_MS) return cachedNews;
   if (refreshInProgress) return refreshInProgress;
 
@@ -451,6 +484,7 @@ const publicFiles = new Map([
   ['/', ['index.html', 'text/html; charset=utf-8']],
   ['/index.html', ['index.html', 'text/html; charset=utf-8']],
   ['/styles.css', ['styles.css', 'text/css; charset=utf-8']],
+  ['/config.js', ['config.js', 'text/javascript; charset=utf-8']],
   ['/script.js', ['script.js', 'text/javascript; charset=utf-8']]
 ]);
 
@@ -463,8 +497,37 @@ function sendJson(response, status, body) {
   response.end(JSON.stringify(body));
 }
 
+function applyApiCors(request, response) {
+  const origin = request.headers.origin;
+  response.setHeader('Vary', 'Origin');
+  if (typeof origin === 'string' && FRONTEND_ORIGINS.has(origin)) {
+    response.setHeader('Access-Control-Allow-Origin', origin);
+    response.setHeader('Access-Control-Allow-Methods', 'GET, OPTIONS');
+    response.setHeader('Access-Control-Allow-Headers', 'Content-Type');
+  }
+}
+
 const server = http.createServer(async (request, response) => {
   const url = new URL(request.url, `http://${HOST}:${PORT}`);
+  if (url.pathname === '/api/news') {
+    applyApiCors(request, response);
+    if (request.method === 'OPTIONS') {
+      if (request.headers.origin && !FRONTEND_ORIGINS.has(request.headers.origin)) {
+        response.writeHead(403);
+        response.end();
+        return;
+      }
+      response.writeHead(204, { Allow: 'GET, OPTIONS' });
+      response.end();
+      return;
+    }
+  }
+
+  if (url.pathname === '/healthz' && request.method === 'GET') {
+    sendJson(response, 200, { status: 'ok' });
+    return;
+  }
+
   if (request.method !== 'GET') {
     response.writeHead(405, { Allow: 'GET' });
     response.end('Method not allowed');
@@ -523,6 +586,6 @@ const server = http.createServer(async (request, response) => {
 });
 
 server.listen(PORT, HOST, () => {
-  console.log(`PulseNews is running at http://${HOST}:${PORT}`);
-  console.log(`SerpApi cache interval: ${NEWS_REFRESH_INTERVAL_MS}ms`);
+  console.log(`PulseNews is listening on ${HOST}:${PORT}`);
+  console.log(`News feed cache interval: ${NEWS_REFRESH_INTERVAL_MS}ms`);
 });

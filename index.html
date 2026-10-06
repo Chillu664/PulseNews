@@ -7,6 +7,7 @@
   <meta name="description" content="PulseNews — Ghana and world news.">
   <title>PulseNews — Ghana and the world, in focus</title>
   <link rel="stylesheet" href="styles.css">
+  <script src="config.js"></script>
   <script src="script.js" defer></script>
 </head>
 <body>
@@ -71,9 +72,12 @@
     <section class="container live-section" id="latest" aria-labelledby="live-news-title">
       <div class="section-heading live-heading">
         <div><p class="section-label">LATEST FROM OUR NEWS SOURCES</p><h2 id="live-news-title">Latest news</h2></div>
-        <p class="live-status" id="live-status" role="status">Connecting to SerpApi…</p>
+        <p class="live-status" id="live-status" role="status">Connecting to live news feeds…</p>
       </div>
-      <p class="feed-notice" id="feed-notice" role="status" hidden></p>
+      <div class="feed-notice" id="feed-notice" role="status" hidden>
+        <strong id="feed-notice-title"></strong>
+        <span id="feed-notice-message"></span>
+      </div>
       <div class="news-layout">
         <div class="latest-main">
           <div class="live-grid" id="live-headlines" aria-live="polite">
@@ -87,7 +91,7 @@
           </ol>
         </aside>
       </div>
-      <p class="live-disclaimer">Headlines, descriptions and images are provided by Google News results via SerpApi and their publishers. Image availability and publication details vary by source.</p>
+      <p class="live-disclaimer">Headlines and descriptions are provided by the selected news source. Images and publication details are provided by publishers and may vary by source.</p>
     </section>
 
     <section class="topic-section" id="ghana">
@@ -133,7 +137,7 @@
       <div class="footer-column"><h2>PulseNews</h2><a href="#about">About us</a><a href="#about">Editorial principles</a><a href="#about">Contact</a><a href="#about">Privacy</a></div>
       <div class="footer-column footer-social"><h2>Follow PulseNews</h2><span>Instagram <small>Coming soon</small></span><span>LinkedIn <small>Coming soon</small></span><span>YouTube <small>Coming soon</small></span></div>
     </div>
-    <div class="container footer-bottom"><span>© <span id="year"></span> PulseNews. All rights reserved.</span><span>Google News results via SerpApi · Headlines link to publishers.</span></div>
+    <div class="container footer-bottom"><span>© <span id="year"></span> PulseNews. All rights reserved.</span><span>News via Google News RSS · Headlines link to publishers.</span></div>
   </footer>
 </body>
 </html>

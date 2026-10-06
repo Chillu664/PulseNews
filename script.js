@@ -8,12 +8,26 @@ const primaryNav = document.querySelector('#primary-nav');
 const liveHeadlines = document.querySelector('#live-headlines');
 const liveStatus = document.querySelector('#live-status');
 const feedNotice = document.querySelector('#feed-notice');
+const feedNoticeTitle = document.querySelector('#feed-notice-title');
+const feedNoticeMessage = document.querySelector('#feed-notice-message');
 const breakingHeadline = document.querySelector('#breaking-headline');
-const refreshEveryMs = 60_000;
 const LATEST_ARTICLE_COUNT = 12;
 const CATEGORY_ARTICLE_COUNT = 10;
 const TOP_HEADLINE_COUNT = 10;
+const apiBaseUrl = typeof window.PULSENEWS_API_BASE_URL === 'string'
+  ? window.PULSENEWS_API_BASE_URL.trim().replace(/\/+$/, '')
+  : '';
+const directFileMode = window.location.protocol === 'file:' && !apiBaseUrl;
+const refreshEveryMs = 60_000;
 let requestInProgress = false;
+
+function getNewsApiUrl() {
+  if (apiBaseUrl) return `${apiBaseUrl}/api/news`;
+  if (window.location.protocol === 'file:') {
+    throw new Error('Deploy PulseNews on Render, then set its service URL in config.js to load live news from this file.');
+  }
+  return '/api/news';
+}
 
 function setSearchOpen(open) {
   searchToggle.setAttribute('aria-expanded', String(open));
@@ -280,7 +294,13 @@ function renderNews(news) {
     } else {
       const empty = document.createElement('p');
       empty.className = 'live-placeholder';
-      empty.textContent = `No ${category} headlines are available right now.`;
+      const error = news.categoryErrors?.[category];
+      const provider = news.provider || 'news feeds';
+      empty.textContent = error
+        ? /request limit|quota|too many requests/i.test(error)
+          ? `${provider} has reached its request limit for ${category} news. Headlines should return when the provider quota resets.`
+          : `${category} news could not be refreshed. Please try again later.`
+        : `No ${category} headlines are available right now.`;
       grid.append(empty);
     }
   });
@@ -293,7 +313,7 @@ async function loadLiveNews() {
   liveStatus.textContent = 'Checking for news updates…';
 
   try {
-    const response = await fetch('/api/news', { cache: 'no-store' });
+    const response = await fetch(getNewsApiUrl(), { cache: 'no-store' });
     const news = await response.json();
     if (!response.ok) throw new Error(news.error || `News service returned ${response.status}`);
 
@@ -307,18 +327,26 @@ async function loadLiveNews() {
         timeStyle: 'short'
       }) + ' GMT';
     const refreshMinutes = Math.round((news.nextRefreshMs || 10_800_000) / 60_000);
-    liveStatus.textContent = `Updated ${updatedTime} · news cache refreshes every ${refreshMinutes} min`;
+    liveStatus.textContent = `Live ${news.provider || 'news'} · updated ${updatedTime} · refreshes every ${refreshMinutes} min`;
     feedNotice.hidden = !news.warning;
-    feedNotice.textContent = news.warning || '';
+    feedNoticeTitle.textContent = news.warning ? 'Some sections could not be updated' : '';
+    feedNoticeMessage.textContent = news.warning || '';
   } catch (error) {
     liveStatus.textContent = 'News is unavailable';
     feedNotice.hidden = false;
-    feedNotice.textContent = error.message;
+    feedNoticeTitle.textContent = 'Live news is temporarily unavailable';
+    feedNoticeMessage.textContent = error.message;
     breakingHeadline.textContent = 'Live headlines are unavailable. See the news section below for details.';
     if (!liveHeadlines.querySelector('.story')) {
       const message = document.createElement('p');
       message.className = 'live-placeholder';
-      message.textContent = 'Add a SerpApi key to the .env file and restart the server to load live news.';
+      if (window.location.protocol === 'file:') {
+        message.textContent = apiBaseUrl
+          ? `Could not reach the Render news service: ${error.message}`
+          : error.message;
+      } else {
+        message.textContent = 'Start the PulseNews backend with npm start to load live news.';
+      }
       liveHeadlines.replaceChildren(message);
       document.querySelector('#lead-story').replaceChildren(message.cloneNode(true));
       const topHeadlinesMessage = document.createElement('li');
