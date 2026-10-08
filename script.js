@@ -14,9 +14,11 @@ const breakingHeadline = document.querySelector('#breaking-headline');
 const LATEST_ARTICLE_COUNT = 12;
 const CATEGORY_ARTICLE_COUNT = 10;
 const TOP_HEADLINE_COUNT = 10;
-const apiBaseUrl = typeof window.PULSENEWS_API_BASE_URL === 'string'
+const configuredApiBaseUrl = typeof window.PULSENEWS_API_BASE_URL === 'string'
   ? window.PULSENEWS_API_BASE_URL.trim().replace(/\/+$/, '')
   : '';
+const localServerMode = ['localhost', '127.0.0.1'].includes(window.location.hostname);
+const apiBaseUrl = localServerMode ? '' : configuredApiBaseUrl;
 const directFileMode = window.location.protocol === 'file:' && !apiBaseUrl;
 const refreshEveryMs = 60_000;
 let requestInProgress = false;
@@ -67,6 +69,23 @@ function safeExternalUrl(value) {
   }
 }
 
+function isPublishableArticle(article) {
+  return Boolean(article && typeof article.title === 'string' && article.title.trim() &&
+    safeExternalUrl(article.url));
+}
+
+function getValidImageUrl(value) {
+  try {
+    const url = new URL(value);
+    if (url.protocol !== 'https:' ||
+      !/\.(?:jpe?g|png|webp)$/i.test(url.pathname) ||
+      /(?:logo|icon|avatar|sprite|default)/i.test(url.href)) return null;
+    return url.href;
+  } catch {
+    return null;
+  }
+}
+
 function formatPublishedAt(value) {
   const date = value ? new Date(value) : null;
   if (!date || Number.isNaN(date.getTime())) return 'Publication time unavailable';
@@ -77,30 +96,28 @@ function formatPublishedAt(value) {
   }) + ' GMT';
 }
 
-function watchImageLoad(image, imageLink, className) {
+function showEmptyNewsMessage(container, asListItem = false) {
+  const message = document.createElement(asListItem ? 'li' : 'p');
+  message.className = 'live-placeholder';
+  message.textContent = 'No stories are available right now.';
+  container.replaceChildren(message);
+}
+
+function watchImageLoad(image, imageLink, story) {
+  image.addEventListener('load', () => {
+    if (image.naturalWidth >= 600) return;
+    imageLink.remove();
+    story.classList.add('text-only-story');
+  });
   image.addEventListener('error', () => {
-    const fallback = safeExternalUrl(image.dataset.fallbackImage);
-    if (fallback && image.dataset.fallbackAttempted !== 'true' && fallback !== image.src) {
-      image.dataset.fallbackAttempted = 'true';
-      image.src = fallback;
-      return;
-    }
-    const placeholder = document.createElement('div');
-    placeholder.className = className.replace('image-link', 'image-placeholder');
-    placeholder.setAttribute('aria-hidden', 'true');
-    imageLink.replaceWith(placeholder);
+    imageLink.remove();
+    story.classList.add('text-only-story');
   });
 }
 
 function addArticleImage(container, article, className) {
-  const source = safeExternalUrl(article.image);
-  if (!source) {
-    const placeholder = document.createElement('div');
-    placeholder.className = className.replace('image-link', 'image-placeholder');
-    placeholder.setAttribute('aria-hidden', 'true');
-    container.append(placeholder);
-    return;
-  }
+  const source = getValidImageUrl(article.image);
+  if (!source) return false;
 
   const imageLink = document.createElement('a');
   imageLink.className = className;
@@ -115,12 +132,11 @@ function addArticleImage(container, article, className) {
   image.loading = className.includes('lead-image') ? 'eager' : 'lazy';
   image.decoding = 'async';
   if (className.includes('lead-image')) image.fetchPriority = 'high';
-  const fallbackImage = safeExternalUrl(article.fallbackImage);
-  if (fallbackImage && fallbackImage !== source) image.dataset.fallbackImage = fallbackImage;
   image.referrerPolicy = 'no-referrer';
-  watchImageLoad(image, imageLink, className);
+  watchImageLoad(image, imageLink, container);
   imageLink.append(image);
   container.append(imageLink);
+  return true;
 }
 
 function addArticleCategory(container, article) {
@@ -134,11 +150,15 @@ function addArticleCategory(container, article) {
 }
 
 function createArticleCard(article) {
+  if (!isPublishableArticle(article)) return null;
   const story = document.createElement('article');
   story.className = 'topic-story story';
+  story.dataset.articleId = article.id;
   story.dataset.search = `${article.categoryLabel} ${article.title} ${article.description} ${article.source}`;
 
-  addArticleImage(story, article, 'topic-image image-link');
+  if (!addArticleImage(story, article, 'topic-image image-link')) {
+    story.classList.add('text-only-story');
+  }
 
   const content = document.createElement('div');
   content.className = 'topic-copy';
@@ -177,10 +197,14 @@ function createArticleCard(article) {
 }
 
 function createLeadStory(article) {
+  if (!isPublishableArticle(article)) return null;
   const lead = document.createElement('article');
   lead.className = 'lead-story story';
+  lead.dataset.articleId = article.id;
   lead.dataset.search = `${article.categoryLabel} ${article.title} ${article.description} ${article.source}`;
-  addArticleImage(lead, article, 'lead-image image-link');
+  if (!addArticleImage(lead, article, 'lead-image image-link')) {
+    lead.classList.add('text-only-story');
+  }
 
   const content = document.createElement('div');
   content.className = 'lead-copy';
@@ -228,9 +252,11 @@ function createLeadStory(article) {
 function renderTopHeadlines(articles) {
   const list = document.querySelector('#top-headlines');
   list.replaceChildren();
-  articles.slice(0, TOP_HEADLINE_COUNT).forEach((article, index) => {
+  const publishableArticles = articles.filter(isPublishableArticle);
+  publishableArticles.slice(0, TOP_HEADLINE_COUNT).forEach((article, index) => {
     const item = document.createElement('li');
     item.className = 'story';
+    item.dataset.articleId = article.id;
     item.dataset.search = `${article.categoryLabel} ${article.title} ${article.source}`;
     const ranking = document.createElement('span');
     ranking.className = 'ranking';
@@ -251,24 +277,26 @@ function renderTopHeadlines(articles) {
     item.append(ranking, content);
     list.append(item);
   });
+  if (!publishableArticles.length) showEmptyNewsMessage(list, true);
 }
 
 function renderNews(news) {
-  const articles = news.articles || [];
+  const articles = (news.articles || []).filter(isPublishableArticle);
   const categories = news.categories || {};
   const lead = articles[0];
 
   if (lead) {
     document.querySelector('#lead-story').replaceChildren(createLeadStory(lead));
     const breakingLink = document.createElement('a');
+    breakingLink.dataset.articleId = lead.id;
     breakingLink.href = safeExternalUrl(lead.url) || '#live-news';
     breakingLink.target = '_blank';
     breakingLink.rel = 'noopener noreferrer';
     breakingLink.textContent = lead.title;
     breakingHeadline.replaceChildren(breakingLink);
   } else {
-    document.querySelector('#lead-story').innerHTML = '<p class="live-placeholder">No headlines are available right now.</p>';
-    breakingHeadline.textContent = 'No headlines are available right now.';
+    showEmptyNewsMessage(document.querySelector('#lead-story'));
+    breakingHeadline.textContent = 'No stories are available right now.';
   }
 
   liveHeadlines.replaceChildren();
@@ -278,7 +306,7 @@ function renderNews(news) {
   if (latest.length) {
     latest.forEach((article) => liveHeadlines.append(createArticleCard(article)));
   } else {
-    liveHeadlines.innerHTML = '<p class="live-placeholder">No headlines are available right now.</p>';
+    showEmptyNewsMessage(liveHeadlines);
   }
 
   const ranked = [...articles]
@@ -287,7 +315,7 @@ function renderNews(news) {
 
   ['ghana', 'world', 'business', 'sports', 'technology'].forEach((category) => {
     const grid = document.querySelector(`#category-${category}`);
-    const categoryArticles = categories[category]?.articles || [];
+    const categoryArticles = (categories[category]?.articles || []).filter(isPublishableArticle);
     grid.replaceChildren();
     if (categoryArticles.length) {
       categoryArticles.slice(0, CATEGORY_ARTICLE_COUNT).forEach((article) => grid.append(createArticleCard(article)));
@@ -300,7 +328,7 @@ function renderNews(news) {
         ? /request limit|quota|too many requests/i.test(error)
           ? `${provider} has reached its request limit for ${category} news. Headlines should return when the provider quota resets.`
           : `${category} news could not be refreshed. Please try again later.`
-        : `No ${category} headlines are available right now.`;
+        : `No ${category} stories are available right now.`;
       grid.append(empty);
     }
   });

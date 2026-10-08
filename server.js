@@ -3,7 +3,6 @@ require('dotenv').config();
 const http = require('node:http');
 const fs = require('node:fs');
 const path = require('node:path');
-const { isIP } = require('node:net');
 
 const HOST = '0.0.0.0';
 const PORT = Number(process.env.PORT) || 3000;
@@ -23,12 +22,7 @@ const FRONTEND_ORIGINS = new Set(
     .filter(Boolean)
 );
 const REQUEST_TIMEOUT_MS = 12_000;
-const PUBLISHER_PAGE_TIMEOUT_MS = 6_000;
 const MAX_RESPONSE_BYTES = 3_000_000;
-const MAX_PUBLISHER_PAGE_BYTES = 512_000;
-const MAX_PUBLISHER_METADATA_REQUESTS = 5;
-const MAX_PUBLISHER_REDIRECTS = 4;
-const PUBLISHER_METADATA_ARTICLE_COUNT = 4;
 const ROOT = __dirname;
 const USE_GNEWS = process.env.NEWS_PROVIDER?.trim().toLowerCase() === 'gnews';
 const API_KEY = [
@@ -48,8 +42,6 @@ const categories = [
 let cachedNews = null;
 let lastFetchAt = 0;
 let refreshInProgress = null;
-let activePublisherMetadataRequests = 0;
-const publisherMetadataRequestQueue = [];
 
 function createApiUrl(feed) {
   const url = new URL('https://gnews.io/api/v4/search');
@@ -86,11 +78,27 @@ function extractRssTag(item, tagName) {
   return decodeHtmlAttribute(match[1].replace(/<!\[CDATA\[([\s\S]*?)\]\]>/g, '$1').replace(/<[^>]*>/g, '').trim());
 }
 
+function extractRssAttribute(item, tagName, attributeName) {
+  const tag = item.match(new RegExp(`<${tagName}\\b([^>]*)>`, 'i'));
+  if (!tag) return '';
+  const attribute = tag[1].match(new RegExp(`\\b${attributeName}\\s*=\\s*(?:"([^"]*)"|'([^']*)'|([^\\s>]+))`, 'i'));
+  return attribute ? decodeHtmlAttribute(attribute[1] ?? attribute[2] ?? attribute[3] ?? '') : '';
+}
+
 function parseRssArticles(xml, feed) {
-  const items = [...xml.matchAll(/<item\b[^>]*>([\s\S]*?)<\/item\s*>/gi)].slice(0, 10);
+  const items = [...xml.matchAll(/<item\b[^>]*>([\s\S]*?)<\/item\s*>/gi)].slice(0, 12);
   return items.map((match) => {
     const item = match[1];
-    const url = extractRssTag(item, 'link');
+    let url = extractRssTag(item, 'link');
+    try {
+      const articleUrl = new URL(url);
+      if (articleUrl.protocol === 'http:' && articleUrl.hostname === 'www.bing.com') {
+        articleUrl.protocol = 'https:';
+        url = articleUrl.href;
+      }
+    } catch {
+      url = '';
+    }
     const title = extractRssTag(item, 'title');
     const publishedAt = extractRssTag(item, 'pubDate');
     const source = extractRssTag(item, 'source') || extractRssTag(item, 'News:Source');
@@ -98,18 +106,10 @@ function parseRssArticles(xml, feed) {
     const description = /<a\b[^>]*\bhref\s*=/i.test(rssDescription)
       ? ''
       : rssDescription.replace(/<[^>]*>/g, ' ').replace(/\s+/g, ' ').trim();
-    let image = extractRssTag(item, 'News:Image');
-    if (image) {
-      try {
-        const imageUrl = new URL(image);
-        if (imageUrl.protocol === 'http:' && imageUrl.hostname === 'www.bing.com') {
-          imageUrl.protocol = 'https:';
-          image = imageUrl.href;
-        }
-      } catch {
-        image = null;
-      }
-    }
+    const image = extractRssTag(item, 'News:Image') ||
+      extractRssAttribute(item, 'media:content', 'url') ||
+      extractRssAttribute(item, 'media:thumbnail', 'url') ||
+      extractRssAttribute(item, 'enclosure', 'url');
     return normalizeArticle({
       title,
       description,
@@ -146,20 +146,45 @@ async function fetchRssArticles(url, feed, provider) {
   return { articles, provider };
 }
 
+function isTransientTimeout(error) {
+  return error?.name === 'TimeoutError' ||
+    ['ECONNRESET', 'ETIMEDOUT', 'EAI_AGAIN'].includes(error?.cause?.code) ||
+    /timed out|timeout/i.test(error instanceof Error ? error.message : '');
+}
+
+async function fetchRssArticlesWithRetry(url, feed, provider) {
+  try {
+    return await fetchRssArticles(url, feed, provider);
+  } catch (error) {
+    if (!isTransientTimeout(error)) throw error;
+    console.warn(`${provider} timed out (${feed.label}); retrying once.`);
+    await new Promise((resolve) => setTimeout(resolve, 500));
+    return fetchRssArticles(url, feed, provider);
+  }
+}
+
 async function fetchRssCategory(feed) {
   try {
-    return await fetchRssArticles(createBingRssUrl(feed), feed, 'Bing News RSS');
+    const result = await fetchRssArticlesWithRetry(createBingRssUrl(feed), feed, 'Bing News RSS');
+    return {
+      ...result,
+      articles: result.articles.slice(0, 10)
+    };
   } catch (error) {
     const message = error instanceof Error ? error.message : 'Unknown Bing News RSS error';
     console.warn(`Bing News RSS request failed (${feed.label}); falling back to Google News RSS: ${message}`);
-    return fetchRssArticles(createRssUrl(feed), feed, 'Google News RSS');
+    const result = await fetchRssArticlesWithRetry(createRssUrl(feed), feed, 'Google News RSS');
+    return {
+      ...result,
+      articles: result.articles.slice(0, 10)
+    };
   }
 }
 
 async function fetchCategoryWithFallback(feed) {
   if (USE_GNEWS && API_KEY) {
     try {
-      const articles = await fetchCategoryWithPublisherMetadata(feed);
+      const articles = await fetchCategory(feed);
       if (!articles.length) throw new Error('GNews returned no articles.');
       return { articles, provider: 'GNews' };
     } catch (error) {
@@ -182,29 +207,6 @@ function normalizeStoryUrl(value) {
   }
 }
 
-function safePublisherUrl(value, base) {
-  try {
-    const url = new URL(value, base);
-    const hostname = url.hostname.toLowerCase().replace(/^\[|\]$/g, '').replace(/\.$/, '');
-    if (url.protocol !== 'https:' || url.username || url.password ||
-      isIP(hostname) || hostname === 'localhost' ||
-      hostname.endsWith('.localhost') || hostname.endsWith('.local')) {
-      return null;
-    }
-    return url;
-  } catch {
-    return null;
-  }
-}
-
-function getMetaAttributes(tag) {
-  const attributes = new Map();
-  for (const match of tag.matchAll(/([a-zA-Z_:][\w:.-]*)\s*=\s*(?:"([^"]*)"|'([^']*)'|([^\s>]+))/g)) {
-    attributes.set(match[1].toLowerCase(), match[2] ?? match[3] ?? match[4] ?? '');
-  }
-  return attributes;
-}
-
 function decodeHtmlAttribute(value) {
   return value
     .replace(/&amp;/gi, '&')
@@ -215,153 +217,6 @@ function decodeHtmlAttribute(value) {
     .replace(/&gt;/gi, '>')
     .replace(/&#x([0-9a-f]+);?/gi, (_, code) => String.fromCodePoint(parseInt(code, 16)))
     .replace(/&#(\d+);?/g, (_, code) => String.fromCodePoint(Number(code)));
-}
-
-function findPublisherImage(html, pageUrl) {
-  for (const match of html.matchAll(/<meta\b[^>]*>/gi)) {
-    const attributes = getMetaAttributes(match[0]);
-    const property = (attributes.get('property') || attributes.get('name') || '').toLowerCase();
-    if (!['og:image', 'og:image:secure_url', 'twitter:image'].includes(property)) continue;
-    const content = attributes.get('content');
-    if (!content) continue;
-    const imageUrl = safePublisherUrl(decodeHtmlAttribute(content), pageUrl);
-    if (imageUrl) return imageUrl.href;
-  }
-  return null;
-}
-
-function findPublisherDescription(html) {
-  for (const match of html.matchAll(/<meta\b[^>]*>/gi)) {
-    const attributes = getMetaAttributes(match[0]);
-    const property = (attributes.get('property') || attributes.get('name') || '').toLowerCase();
-    if (!['og:description', 'twitter:description', 'description'].includes(property)) continue;
-    const content = attributes.get('content');
-    const description = content ? decodeHtmlAttribute(content).replace(/\s+/g, ' ').trim() : '';
-    if (description) return description;
-  }
-  return '';
-}
-
-async function acquirePublisherMetadataSlot() {
-  if (activePublisherMetadataRequests >= MAX_PUBLISHER_METADATA_REQUESTS) {
-    await new Promise((resolve) => publisherMetadataRequestQueue.push(resolve));
-  } else {
-    activePublisherMetadataRequests += 1;
-  }
-}
-
-function releasePublisherMetadataSlot() {
-  const waitingRequest = publisherMetadataRequestQueue.shift();
-  if (waitingRequest) {
-    waitingRequest();
-  } else {
-    activePublisherMetadataRequests -= 1;
-  }
-}
-
-async function readPublisherPage(response) {
-  const contentLength = Number(response.headers.get('content-length'));
-  if (Number.isFinite(contentLength) && contentLength > MAX_PUBLISHER_PAGE_BYTES) {
-    throw new Error('publisher page exceeded the allowed size');
-  }
-  if (!response.body) throw new Error('publisher page had no response body');
-
-  const reader = response.body.getReader();
-  const chunks = [];
-  let totalBytes = 0;
-  while (true) {
-    const { done, value } = await reader.read();
-    if (done) break;
-    totalBytes += value.byteLength;
-    if (totalBytes > MAX_PUBLISHER_PAGE_BYTES) {
-      await reader.cancel();
-      throw new Error('publisher page exceeded the allowed size');
-    }
-    chunks.push(Buffer.from(value));
-  }
-  return Buffer.concat(chunks, totalBytes).toString('utf8');
-}
-
-async function fetchPublisherMetadata(article) {
-  let pageUrl = safePublisherUrl(article.url);
-  if (!pageUrl) return { error: 'article URL is not a safe HTTPS address' };
-
-  await acquirePublisherMetadataSlot();
-  try {
-    let response;
-    for (let redirects = 0; redirects <= MAX_PUBLISHER_REDIRECTS; redirects += 1) {
-      response = await fetch(pageUrl, {
-        redirect: 'manual',
-        signal: AbortSignal.timeout(PUBLISHER_PAGE_TIMEOUT_MS),
-        headers: {
-          Accept: 'text/html',
-          'User-Agent': 'PulseNews/1.0'
-        }
-      });
-      if (![301, 302, 303, 307, 308].includes(response.status)) break;
-
-      const location = response.headers.get('location');
-      await response.body?.cancel();
-      const redirectUrl = location ? safePublisherUrl(location, pageUrl) : null;
-      if (!redirectUrl) return { error: 'publisher redirected to an unsafe or invalid URL' };
-      if (redirects === MAX_PUBLISHER_REDIRECTS) return { error: 'publisher page exceeded the redirect limit' };
-      pageUrl = redirectUrl;
-    }
-    if (!response) return { error: 'publisher page returned no response' };
-    if (!response.ok) {
-      await response.body?.cancel();
-      return { error: `publisher page returned HTTP ${response.status}` };
-    }
-    if (!response.headers.get('content-type')?.toLowerCase().includes('text/html')) {
-      await response.body?.cancel();
-      return { error: 'publisher page did not return HTML' };
-    }
-
-    const html = await readPublisherPage(response);
-    const image = findPublisherImage(html, pageUrl);
-    const description = findPublisherDescription(html);
-    return image || description
-      ? { image, description }
-      : { error: 'publisher page did not provide usable image or description metadata' };
-  } finally {
-    releasePublisherMetadataSlot();
-  }
-}
-
-async function upgradePublisherMetadata(feed, articles) {
-  const selected = articles
-    .filter((article) => !article.image || !article.description)
-    .slice(0, PUBLISHER_METADATA_ARTICLE_COUNT);
-  const results = await Promise.all(selected.map(async (article) => {
-    try {
-      return { article, ...(await fetchPublisherMetadata(article)) };
-    } catch (error) {
-      return {
-        article,
-        error: error instanceof Error ? error.message : 'unknown publisher metadata error'
-      };
-    }
-  }));
-
-  const upgraded = new Map();
-  const failures = [];
-  results.forEach(({ article, image, description, error }) => {
-    if (image || description) {
-      upgraded.set(article.id, {
-        ...article,
-        image: article.image || image,
-        fallbackImage: article.image && image && image !== article.image ? article.image : article.fallbackImage,
-        description: article.description || description
-      });
-    } else if (error) {
-      failures.push(error);
-    }
-  });
-  if (failures.length) {
-    const examples = [...new Set(failures)].slice(0, 2).join('; ');
-    console.warn(`Publisher metadata upgrade incomplete (${feed.label}): ${failures.length}/${selected.length} articles; ${examples}.`);
-  }
-  return articles.map((article) => upgraded.get(article.id) || article);
 }
 
 function normalizeArticle(article, feed) {
@@ -380,7 +235,11 @@ function normalizeArticle(article, feed) {
   if (typeof article.image === 'string') {
     try {
       const imageUrl = new URL(article.image);
-      if (imageUrl.protocol === 'https:') image = imageUrl.href;
+      if (imageUrl.protocol === 'https:' &&
+        /\.(?:jpe?g|png|webp)$/i.test(imageUrl.pathname) &&
+        !/(?:logo|icon|avatar|sprite|default)/i.test(imageUrl.href)) {
+        image = imageUrl.href;
+      }
     } catch {
       image = null;
     }
@@ -478,11 +337,6 @@ async function fetchCategory(feed) {
   }, feed)).filter(Boolean);
 }
 
-async function fetchCategoryWithPublisherMetadata(feed) {
-  const articles = await fetchCategory(feed);
-  return upgradePublisherMetadata(feed, articles);
-}
-
 async function refreshNews() {
   const results = await Promise.allSettled(categories.map(fetchCategoryWithFallback));
   const nextCategories = { ...(cachedNews?.categories || {}) };
@@ -496,7 +350,7 @@ async function refreshNews() {
       nextCategories[feed.id] = {
         updatedAt: new Date().toISOString(),
         provider: result.value.provider,
-        articles: result.value.articles
+        articles: result.value.articles.slice(0, 10)
       };
       providers.add(result.value.provider);
       return;
@@ -514,7 +368,7 @@ async function refreshNews() {
   const articles = categories
     .flatMap((feed) => nextCategories[feed.id]?.articles || [])
     .sort((a, b) => Date.parse(b.publishedAt || 0) - Date.parse(a.publishedAt || 0));
-  if (!articles.length) {
+  if (!articles.length && errors.length) {
     throw new Error(errors[0] || 'News feeds returned no news. Try again later.');
   }
 
