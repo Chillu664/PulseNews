@@ -219,6 +219,19 @@ function decodeHtmlAttribute(value) {
     .replace(/&#(\d+);?/g, (_, code) => String.fromCodePoint(Number(code)));
 }
 
+function normalizeImageUrl(value) {
+  if (typeof value !== 'string' || !value.trim()) return null;
+  try {
+    const imageUrl = new URL(value.trim());
+    if (!['https:', 'http:'].includes(imageUrl.protocol)) return null;
+    if (/(?:logo|icon|avatar|sprite|default)/i.test(imageUrl.href)) return null;
+    imageUrl.protocol = 'https:';
+    return imageUrl.href;
+  } catch {
+    return null;
+  }
+}
+
 function normalizeArticle(article, feed) {
   if (!article || typeof article.title !== 'string' || typeof article.url !== 'string') return null;
 
@@ -231,19 +244,7 @@ function normalizeArticle(article, feed) {
     return null;
   }
 
-  let image = null;
-  if (typeof article.image === 'string') {
-    try {
-      const imageUrl = new URL(article.image);
-      if (imageUrl.protocol === 'https:' &&
-        /\.(?:jpe?g|png|webp)$/i.test(imageUrl.pathname) &&
-        !/(?:logo|icon|avatar|sprite|default)/i.test(imageUrl.href)) {
-        image = imageUrl.href;
-      }
-    } catch {
-      image = null;
-    }
-  }
+  const image = normalizeImageUrl(article.image);
 
   const publishedDate = article.publishedAt ? new Date(article.publishedAt) : null;
   return {

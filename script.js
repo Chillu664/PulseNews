@@ -77,9 +77,9 @@ function isPublishableArticle(article) {
 function getValidImageUrl(value) {
   try {
     const url = new URL(value);
-    if (url.protocol !== 'https:' ||
-      !/\.(?:jpe?g|png|webp)$/i.test(url.pathname) ||
+    if (!['https:', 'http:'].includes(url.protocol) ||
       /(?:logo|icon|avatar|sprite|default)/i.test(url.href)) return null;
+    url.protocol = 'https:';
     return url.href;
   } catch {
     return null;
