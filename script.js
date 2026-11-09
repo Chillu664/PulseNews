@@ -112,9 +112,6 @@ function watchImageLoad(image, imageLink, story) {
 
   image.addEventListener('load', () => {
     window.clearTimeout(image.loadTimeout);
-    if (image.naturalWidth >= 320 && image.naturalHeight >= 180) return;
-    imageLink.remove();
-    story.classList.add('text-only-story');
   });
   image.addEventListener('error', () => {
     window.clearTimeout(image.loadTimeout);
