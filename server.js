@@ -85,6 +85,13 @@ function extractRssAttribute(item, tagName, attributeName) {
   return attribute ? decodeHtmlAttribute(attribute[1] ?? attribute[2] ?? attribute[3] ?? '') : '';
 }
 
+function extractDescriptionImage(item) {
+  const description = item.match(/<description\b[^>]*>([\s\S]*?)<\/description\s*>/i)?.[1] || '';
+  const unwrappedDescription = description.replace(/<!\[CDATA\[([\s\S]*?)\]\]>/g, '$1');
+  const image = unwrappedDescription.match(/<img\b[^>]*\bsrc\s*=\s*(?:"([^"]+)"|'([^']+)'|([^\s>]+))/i);
+  return decodeHtmlAttribute(image?.[1] ?? image?.[2] ?? image?.[3] ?? '');
+}
+
 function parseRssArticles(xml, feed) {
   const items = [...xml.matchAll(/<item\b[^>]*>([\s\S]*?)<\/item\s*>/gi)].slice(0, 12);
   return items.map((match) => {
@@ -109,7 +116,8 @@ function parseRssArticles(xml, feed) {
     const image = extractRssTag(item, 'News:Image') ||
       extractRssAttribute(item, 'media:content', 'url') ||
       extractRssAttribute(item, 'media:thumbnail', 'url') ||
-      extractRssAttribute(item, 'enclosure', 'url');
+      extractRssAttribute(item, 'enclosure', 'url') ||
+      extractDescriptionImage(item);
     return normalizeArticle({
       title,
       description,
