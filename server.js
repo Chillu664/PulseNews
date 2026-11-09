@@ -154,6 +154,36 @@ async function fetchRssArticles(url, feed, provider) {
   return { articles, provider };
 }
 
+function extractOpenGraphImage(html) {
+  const metaTags = [...html.matchAll(/<meta\b[^>]*>/gi)];
+  for (const [tag] of metaTags) {
+    const property = tag.match(/\b(?:property|name)\s*=\s*(?:"([^"]*)"|'([^']*)'|([^\s>]+))/i)?.slice(1).find(Boolean);
+    if (!/^(?:og:image|twitter:image)$/i.test(property || '')) continue;
+    const content = tag.match(/\bcontent\s*=\s*(?:"([^"]*)"|'([^']*)'|([^\s>]+))/i)?.slice(1).find(Boolean);
+    if (content) return decodeHtmlAttribute(content.trim());
+  }
+  return '';
+}
+
+async function resolvePublisherImage(article) {
+  if (article.image) return article.image;
+  try {
+    const response = await fetch(article.url, {
+      signal: AbortSignal.timeout(8_000),
+      redirect: 'follow',
+      headers: {
+        Accept: 'text/html',
+        'User-Agent': 'Mozilla/5.0 (compatible; PulseNews/1.0)'
+      }
+    });
+    if (!response.ok) return null;
+    const html = await response.text();
+    return normalizeImageUrl(extractOpenGraphImage(html));
+  } catch {
+    return null;
+  }
+}
+
 function isTransientTimeout(error) {
   return error?.name === 'TimeoutError' ||
     ['ECONNRESET', 'ETIMEDOUT', 'EAI_AGAIN'].includes(error?.cause?.code) ||
@@ -174,9 +204,13 @@ async function fetchRssArticlesWithRetry(url, feed, provider) {
 async function fetchRssCategory(feed) {
   try {
     const result = await fetchRssArticlesWithRetry(createBingRssUrl(feed), feed, 'Bing News RSS');
+    const articles = await Promise.all(result.articles.slice(0, 10).map(async (article) => ({
+      ...article,
+      image: await resolvePublisherImage(article)
+    })));
     return {
       ...result,
-      articles: result.articles.slice(0, 10)
+      articles
     };
   } catch (error) {
     const message = error instanceof Error ? error.message : 'Unknown Bing News RSS error';

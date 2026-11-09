@@ -104,17 +104,9 @@ function showEmptyNewsMessage(container, asListItem = false) {
 }
 
 function watchImageLoad(image, imageLink, story) {
-  image.loadTimeout = window.setTimeout(() => {
-    if (image.complete) return;
-    imageLink.remove();
-    story.classList.add('text-only-story');
-  }, 2500);
-
   image.addEventListener('load', () => {
-    window.clearTimeout(image.loadTimeout);
   });
   image.addEventListener('error', () => {
-    window.clearTimeout(image.loadTimeout);
     imageLink.remove();
     story.classList.add('text-only-story');
   });
