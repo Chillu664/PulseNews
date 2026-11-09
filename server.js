@@ -96,7 +96,7 @@ function parseRssArticles(xml, feed) {
   const items = [...xml.matchAll(/<item\b[^>]*>([\s\S]*?)<\/item\s*>/gi)].slice(0, 12);
   return items.map((match) => {
     const item = match[1];
-    let url = extractRssTag(item, 'link');
+    let url = unwrapBingNewsUrl(extractRssTag(item, 'link'));
     try {
       const articleUrl = new URL(url);
       if (articleUrl.protocol === 'http:' && articleUrl.hostname === 'www.bing.com') {
@@ -259,6 +259,18 @@ function decodeHtmlAttribute(value) {
     .replace(/&gt;/gi, '>')
     .replace(/&#x([0-9a-f]+);?/gi, (_, code) => String.fromCodePoint(parseInt(code, 16)))
     .replace(/&#(\d+);?/g, (_, code) => String.fromCodePoint(Number(code)));
+}
+
+function unwrapBingNewsUrl(value) {
+  try {
+    const redirectUrl = new URL(value);
+    const publisherUrl = redirectUrl.hostname === 'www.bing.com'
+      ? redirectUrl.searchParams.get('url')
+      : null;
+    return publisherUrl || value;
+  } catch {
+    return value;
+  }
 }
 
 function normalizeImageUrl(value) {
