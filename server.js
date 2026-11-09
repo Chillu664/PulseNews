@@ -158,10 +158,12 @@ function extractOpenGraphImage(html) {
   const metaTags = [...html.matchAll(/<meta\b[^>]*>/gi)];
   for (const [tag] of metaTags) {
     const property = tag.match(/\b(?:property|name)\s*=\s*(?:"([^"]*)"|'([^']*)'|([^\s>]+))/i)?.slice(1).find(Boolean);
-    if (!/^(?:og:image|twitter:image)$/i.test(property || '')) continue;
+    if (!/^(?:og:image|og:image:url|twitter:image|twitter:image:src)$/i.test(property || '')) continue;
     const content = tag.match(/\bcontent\s*=\s*(?:"([^"]*)"|'([^']*)'|([^\s>]+))/i)?.slice(1).find(Boolean);
     if (content) return decodeHtmlAttribute(content.trim());
   }
+  const imageLink = html.match(/<link\b[^>]*\brel\s*=\s*(?:"[^"]*\bimage_src\b[^"]*"|'[^']*\bimage_src\b[^']*'|[^\s>]*image_src[^\s>]*)[^>]*\bhref\s*=\s*(?:"([^"]*)"|'([^']*)'|([^\s>]+))/i);
+  if (imageLink) return decodeHtmlAttribute(imageLink[1] ?? imageLink[2] ?? imageLink[3] ?? '');
   return '';
 }
 
@@ -178,7 +180,12 @@ async function resolvePublisherImage(article) {
     });
     if (!response.ok) return null;
     const html = await response.text();
-    return normalizeImageUrl(extractOpenGraphImage(html));
+    const image = extractOpenGraphImage(html);
+    try {
+      return normalizeImageUrl(image ? new URL(image, response.url).href : '');
+    } catch {
+      return null;
+    }
   } catch {
     return null;
   }
