@@ -104,9 +104,18 @@ function showEmptyNewsMessage(container, asListItem = false) {
 }
 
 function watchImageLoad(image, imageLink, story) {
+  const loadingTimeout = window.setTimeout(() => {
+    if (!image.complete || image.naturalWidth === 0) {
+      imageLink.remove();
+      story.classList.add('text-only-story');
+    }
+  }, 8000);
+
   image.addEventListener('load', () => {
+    window.clearTimeout(loadingTimeout);
   });
   image.addEventListener('error', () => {
+    window.clearTimeout(loadingTimeout);
     imageLink.remove();
     story.classList.add('text-only-story');
   });
