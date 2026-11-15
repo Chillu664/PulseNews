@@ -1,0 +1,39 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <meta name="theme-color" content="#111111">
+  <meta name="description" content="Contact the PulseNews support team.">
+  <title>PulseNews — Support</title>
+  <link rel="stylesheet" href="/styles.css">
+  <script src="/account.js" defer></script>
+</head>
+<body>
+  <a class="skip-link" href="#main">Skip to content</a>
+  <header class="site-header page-header">
+    <div class="container page-nav">
+      <a class="brand" href="/" aria-label="PulseNews home"><span class="brand-pulse">P</span><span>Pulse<span class="brand-accent">News</span></span></a>
+      <nav aria-label="Page navigation"><a href="/">News</a><a class="active" href="/support">Support</a><a href="/donate">Donate</a><a href="/account">Sign in</a></nav>
+    </div>
+  </header>
+  <main class="container page-main" id="main">
+    <p class="section-label">WE’RE HERE TO HELP</p>
+    <h1>How can we help?</h1>
+    <p class="page-intro">Send a question or report a problem. We’ll save your request and show you a reference number when it’s received.</p>
+    <form class="page-panel page-form" id="support-form">
+      <label for="support-name">Name</label>
+      <input id="support-name" name="name" autocomplete="name" maxlength="80" required>
+      <label for="support-email">Email</label>
+      <input id="support-email" name="email" type="email" autocomplete="email" maxlength="254" required>
+      <label for="support-subject">Subject</label>
+      <input id="support-subject" name="subject" maxlength="120" value="General support" required>
+      <label for="support-message">Message</label>
+      <textarea id="support-message" name="message" rows="6" maxlength="5000" required></textarea>
+      <button class="primary-action" type="submit">Send message</button>
+      <p class="form-status" id="support-status" role="status" aria-live="polite"></p>
+    </form>
+  </main>
+  <footer class="site-footer page-footer"><div class="container footer-bottom"><span>© PulseNews</span><a href="/">Back to the headlines</a></div></footer>
+</body>
+</html>

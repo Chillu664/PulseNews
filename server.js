@@ -3,6 +3,8 @@ require('dotenv').config();
 const http = require('node:http');
 const fs = require('node:fs');
 const path = require('node:path');
+const crypto = require('node:crypto');
+const { promisify } = require('node:util');
 
 const HOST = '0.0.0.0';
 const PORT = Number(process.env.PORT) || 3000;
@@ -24,6 +26,11 @@ const FRONTEND_ORIGINS = new Set(
 const REQUEST_TIMEOUT_MS = 12_000;
 const MAX_RESPONSE_BYTES = 3_000_000;
 const ROOT = __dirname;
+const DATA_DIR = process.env.DATA_DIR || path.join(ROOT, 'data');
+const DATA_FILE = path.join(DATA_DIR, 'app-data.json');
+const SESSION_COOKIE = 'pn_session';
+const SESSION_MAX_AGE_SECONDS = 60 * 60 * 24 * 30;
+const scrypt = promisify(crypto.scrypt);
 const USE_GNEWS = process.env.NEWS_PROVIDER?.trim().toLowerCase() === 'gnews';
 const API_KEY = [
   process.env.GNEWS_API_KEY,
@@ -42,6 +49,189 @@ const categories = [
 let cachedNews = null;
 let lastFetchAt = 0;
 let refreshInProgress = null;
+let appData = { users: [], sessions: [], supportMessages: [] };
+let saveAppDataInProgress = Promise.resolve();
+let appDataLoaded = false;
+let appDataLoading = null;
+
+async function loadAppData() {
+  if (appDataLoaded) return;
+  if (!appDataLoading) {
+    appDataLoading = (async () => {
+      try {
+        const savedData = JSON.parse(await fs.promises.readFile(DATA_FILE, 'utf8'));
+        appData = {
+          users: Array.isArray(savedData.users) ? savedData.users : [],
+          sessions: Array.isArray(savedData.sessions) ? savedData.sessions : [],
+          supportMessages: Array.isArray(savedData.supportMessages) ? savedData.supportMessages : []
+        };
+      } catch (error) {
+        if (error.code !== 'ENOENT') throw error;
+        await fs.promises.mkdir(DATA_DIR, { recursive: true });
+      }
+      appDataLoaded = true;
+    })().catch((error) => {
+      appDataLoading = null;
+      throw error;
+    });
+  }
+  await appDataLoading;
+}
+
+function saveAppData() {
+  const snapshot = JSON.stringify(appData);
+  saveAppDataInProgress = saveAppDataInProgress.then(async () => {
+    await fs.promises.mkdir(DATA_DIR, { recursive: true });
+    const temporaryFile = `${DATA_FILE}.${process.pid}.tmp`;
+    await fs.promises.writeFile(temporaryFile, snapshot, { mode: 0o600 });
+    await fs.promises.rename(temporaryFile, DATA_FILE);
+  });
+  return saveAppDataInProgress;
+}
+
+function getRequestIp(request) {
+  return request.socket.remoteAddress || 'unknown';
+}
+
+function setSessionCookie(response, request, token) {
+  const secure = request.socket.encrypted || request.headers['x-forwarded-proto'] === 'https';
+  response.setHeader('Set-Cookie',
+    `${SESSION_COOKIE}=${token}; HttpOnly; SameSite=Lax; Path=/; Max-Age=${SESSION_MAX_AGE_SECONDS}${secure ? '; Secure' : ''}`);
+}
+
+function clearSessionCookie(response, request) {
+  response.setHeader('Set-Cookie',
+    `${SESSION_COOKIE}=; HttpOnly; SameSite=Lax; Path=/; Max-Age=0${request.socket.encrypted || request.headers['x-forwarded-proto'] === 'https' ? '; Secure' : ''}`);
+}
+
+function getSessionToken(request) {
+  const cookie = request.headers.cookie || '';
+  const match = cookie.split(';').map((part) => part.trim())
+    .find((part) => part.startsWith(`${SESSION_COOKIE}=`));
+  return match ? match.slice(SESSION_COOKIE.length + 1) : '';
+}
+
+function publicUser(user) {
+  return { id: user.id, name: user.name, email: user.email };
+}
+
+function findSessionUser(request) {
+  const token = getSessionToken(request);
+  if (!token) return null;
+  const tokenHash = crypto.createHash('sha256').update(token).digest('hex');
+  const session = appData.sessions.find((item) => item.tokenHash === tokenHash && item.expiresAt > Date.now());
+  return session ? appData.users.find((user) => user.id === session.userId) || null : null;
+}
+
+async function createSession(response, request, user) {
+  const token = crypto.randomBytes(32).toString('base64url');
+  appData.sessions = appData.sessions.filter((session) => session.expiresAt > Date.now());
+  appData.sessions.push({
+    tokenHash: crypto.createHash('sha256').update(token).digest('hex'),
+    userId: user.id,
+    expiresAt: Date.now() + SESSION_MAX_AGE_SECONDS * 1000
+  });
+  await saveAppData();
+  setSessionCookie(response, request, token);
+}
+
+async function readJsonBody(request, maxBytes = 10_000) {
+  const chunks = [];
+  let byteLength = 0;
+  for await (const chunk of request) {
+    byteLength += chunk.length;
+    if (byteLength > maxBytes) {
+      const error = new Error('Request body is too large.');
+      error.statusCode = 413;
+      throw error;
+    }
+    chunks.push(chunk);
+  }
+  try {
+    const body = JSON.parse(Buffer.concat(chunks).toString('utf8'));
+    if (!body || typeof body !== 'object' || Array.isArray(body)) {
+      throw new Error('Request body must be a JSON object.');
+    }
+    return body;
+  } catch {
+    const error = new Error('Request body must be a valid JSON object.');
+    error.statusCode = 400;
+    throw error;
+  }
+}
+
+async function handleAuthRequest(request, response, pathname) {
+  await loadAppData();
+  if (pathname === '/api/auth/me' && request.method === 'GET') {
+    const user = findSessionUser(request);
+    sendJson(response, 200, { user: user ? publicUser(user) : null });
+    return true;
+  }
+  if (pathname === '/api/auth/logout' && request.method === 'POST') {
+    const token = getSessionToken(request);
+    const tokenHash = crypto.createHash('sha256').update(token).digest('hex');
+    appData.sessions = appData.sessions.filter((session) => session.tokenHash !== tokenHash);
+    await saveAppData();
+    clearSessionCookie(response, request);
+    sendJson(response, 200, { user: null });
+    return true;
+  }
+  if (!['/api/auth/signup', '/api/auth/login'].includes(pathname) || request.method !== 'POST') return false;
+
+  const body = await readJsonBody(request);
+  const email = typeof body.email === 'string' ? body.email.trim().toLowerCase() : '';
+  const password = typeof body.password === 'string' ? body.password : '';
+  if (!/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(email) || email.length > 254) {
+    sendJson(response, 400, { error: 'Enter a valid email address.' });
+    return true;
+  }
+  if (pathname.endsWith('/signup')) {
+    const name = typeof body.name === 'string' ? body.name.trim() : '';
+    if (!name || name.length > 80) {
+      sendJson(response, 400, { error: 'Name must be between 1 and 80 characters.' });
+      return true;
+    }
+    if (password.length < 8 || password.length > 128) {
+      sendJson(response, 400, { error: 'Password must be between 8 and 128 characters.' });
+      return true;
+    }
+    if (appData.users.some((user) => user.email === email)) {
+      sendJson(response, 409, { error: 'An account with that email already exists. Please sign in.' });
+      return true;
+    }
+    const salt = crypto.randomBytes(16);
+    const passwordHash = await scrypt(password, salt, 64);
+    if (appData.users.some((existingUser) => existingUser.email === email)) {
+      sendJson(response, 409, { error: 'An account with that email already exists. Please sign in.' });
+      return true;
+    }
+    const user = {
+      id: crypto.randomUUID(),
+      name,
+      email,
+      passwordSalt: salt.toString('hex'),
+      passwordHash: passwordHash.toString('hex'),
+      createdAt: new Date().toISOString()
+    };
+    appData.users.push(user);
+    await createSession(response, request, user);
+    sendJson(response, 201, { user: publicUser(user) });
+    return true;
+  }
+
+  const user = appData.users.find((item) => item.email === email);
+  const salt = user ? Buffer.from(user.passwordSalt, 'hex') : Buffer.alloc(16);
+  const expectedHash = user ? Buffer.from(user.passwordHash, 'hex') : Buffer.alloc(64);
+  const passwordHash = await scrypt(password, salt, 64);
+  if (!user || passwordHash.length !== expectedHash.length ||
+    !crypto.timingSafeEqual(passwordHash, expectedHash)) {
+    sendJson(response, 401, { error: 'Email or password is incorrect.' });
+    return true;
+  }
+  await createSession(response, request, user);
+  sendJson(response, 200, { user: publicUser(user) });
+  return true;
+}
 
 function createApiUrl(feed) {
   const url = new URL('https://gnews.io/api/v4/search');
@@ -215,17 +405,23 @@ async function fetchRssCategory(feed) {
       ...article,
       image: await resolvePublisherImage(article)
     })));
+    const publishableArticles = articles.filter((article) => article.image && article.description.trim());
+    if (!publishableArticles.length) throw new Error('Bing News RSS returned no stories with usable summaries and photos.');
     return {
       ...result,
-      articles
+      articles: publishableArticles
     };
   } catch (error) {
     const message = error instanceof Error ? error.message : 'Unknown Bing News RSS error';
     console.warn(`Bing News RSS request failed (${feed.label}); falling back to Google News RSS: ${message}`);
     const result = await fetchRssArticlesWithRetry(createRssUrl(feed), feed, 'Google News RSS');
+    const articles = await Promise.all(result.articles.slice(0, 10).map(async (article) => ({
+      ...article,
+      image: await resolvePublisherImage(article)
+    })));
     return {
       ...result,
-      articles: result.articles.slice(0, 10)
+      articles: articles.filter((article) => article.image && article.description)
     };
   }
 }
@@ -235,7 +431,10 @@ async function fetchCategoryWithFallback(feed) {
     try {
       const articles = await fetchCategory(feed);
       if (!articles.length) throw new Error('GNews returned no articles.');
-      return { articles, provider: 'GNews' };
+      return {
+        articles: articles.filter((article) => article.image && article.description),
+        provider: 'GNews'
+      };
     } catch (error) {
       const message = redactApiKey(error instanceof Error ? error.message : 'Unknown GNews error');
       console.warn(`GNews request failed (${feed.label}); falling back to free RSS: ${message}`);
@@ -285,7 +484,6 @@ function normalizeImageUrl(value) {
   try {
     const imageUrl = new URL(value.trim());
     if (!['https:', 'http:'].includes(imageUrl.protocol)) return null;
-    if (/(?:logo|icon|avatar|sprite|default)/i.test(imageUrl.href)) return null;
     imageUrl.protocol = 'https:';
     return imageUrl.href;
   } catch {
@@ -412,7 +610,9 @@ async function refreshNews() {
       nextCategories[feed.id] = {
         updatedAt: new Date().toISOString(),
         provider: result.value.provider,
-        articles: result.value.articles.slice(0, 10)
+        articles: result.value.articles
+          .filter((article) => article.image && article.description.trim())
+          .slice(0, 10)
       };
       providers.add(result.value.provider);
       return;
@@ -471,7 +671,14 @@ async function getNews() {
 const publicFiles = new Map([
   ['/', ['index.html', 'text/html; charset=utf-8']],
   ['/index.html', ['index.html', 'text/html; charset=utf-8']],
+  ['/donate', ['donate.html', 'text/html; charset=utf-8']],
+  ['/donate.html', ['donate.html', 'text/html; charset=utf-8']],
+  ['/support', ['support.html', 'text/html; charset=utf-8']],
+  ['/support.html', ['support.html', 'text/html; charset=utf-8']],
+  ['/account', ['account.html', 'text/html; charset=utf-8']],
+  ['/account.html', ['account.html', 'text/html; charset=utf-8']],
   ['/styles.css', ['styles.css', 'text/css; charset=utf-8']],
+  ['/account.js', ['account.js', 'text/javascript; charset=utf-8']],
   ['/config.js', ['config.js', 'text/javascript; charset=utf-8']],
   ['/script.js', ['script.js', 'text/javascript; charset=utf-8']]
 ]);
@@ -513,6 +720,65 @@ const server = http.createServer(async (request, response) => {
 
   if (url.pathname === '/healthz' && request.method === 'GET') {
     sendJson(response, 200, { status: 'ok' });
+    return;
+  }
+
+  try {
+    if (url.pathname.startsWith('/api/auth/')) {
+      if (await handleAuthRequest(request, response, url.pathname)) return;
+      response.writeHead(405, { Allow: url.pathname.endsWith('/me') ? 'GET' : 'POST' });
+      response.end('Method not allowed');
+      return;
+    }
+
+    if (url.pathname === '/api/support' && request.method === 'POST') {
+      await loadAppData();
+      const body = await readJsonBody(request);
+      const name = typeof body.name === 'string' ? body.name.trim() : '';
+      const email = typeof body.email === 'string' ? body.email.trim().toLowerCase() : '';
+      const message = typeof body.message === 'string' ? body.message.trim() : '';
+      const subject = typeof body.subject === 'string' ? body.subject.trim() : 'General support';
+      if (!name || name.length > 80 || !/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(email) || email.length > 254 ||
+        !message || message.length > 5000 || !subject || subject.length > 120) {
+        sendJson(response, 400, { error: 'Please provide a name, valid email, subject, and message under 5,000 characters.' });
+        return;
+      }
+      const ticket = {
+        id: crypto.randomUUID(),
+        name,
+        email,
+        subject,
+        message,
+        createdAt: new Date().toISOString()
+      };
+      appData.supportMessages.push(ticket);
+      appData.supportMessages = appData.supportMessages.slice(-5000);
+      await saveAppData();
+      sendJson(response, 201, { received: true, ticketId: ticket.id });
+      return;
+    }
+    if (url.pathname === '/api/support') {
+      response.writeHead(405, { Allow: 'POST' });
+      response.end('Method not allowed');
+      return;
+    }
+    if (url.pathname === '/api/donation' && request.method === 'GET') {
+      let checkoutUrl = '';
+      try {
+        const configuredUrl = new URL(process.env.DONATION_CHECKOUT_URL || '');
+        if (configuredUrl.protocol === 'https:') checkoutUrl = configuredUrl.href;
+      } catch {
+        checkoutUrl = '';
+      }
+      sendJson(response, 200, { checkoutUrl });
+      return;
+    }
+  } catch (error) {
+    const statusCode = Number.isInteger(error.statusCode) ? error.statusCode : 500;
+    if (statusCode === 500) console.error(`Request failed (${url.pathname}): ${error.message}`);
+    sendJson(response, statusCode, {
+      error: statusCode === 500 ? 'The request could not be completed. Please try again later.' : error.message
+    });
     return;
   }
 

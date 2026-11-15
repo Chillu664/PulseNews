@@ -1,0 +1,43 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <meta name="theme-color" content="#111111">
+  <meta name="description" content="Sign in or create a PulseNews account.">
+  <title>PulseNews — Your account</title>
+  <link rel="stylesheet" href="/styles.css">
+  <script src="/account.js" defer></script>
+</head>
+<body>
+  <a class="skip-link" href="#main">Skip to content</a>
+  <header class="site-header page-header">
+    <div class="container page-nav">
+      <a class="brand" href="/" aria-label="PulseNews home"><span class="brand-pulse">P</span><span>Pulse<span class="brand-accent">News</span></span></a>
+      <nav aria-label="Page navigation"><a href="/">News</a><a href="/support">Support</a><a href="/donate">Donate</a><a class="active" href="/account">Account</a></nav>
+    </div>
+  </header>
+  <main class="container page-main account-main" id="main">
+    <p class="section-label">YOUR PULSENEWS ACCOUNT</p>
+    <h1 id="account-title">Sign in</h1>
+    <section class="page-panel">
+      <div id="account-session" hidden>
+        <p class="page-intro">You’re signed in as <strong id="account-name"></strong>.</p>
+        <button class="secondary-action" id="sign-out" type="button">Sign out</button>
+      </div>
+      <form class="page-form" id="account-form">
+        <label id="name-label" for="account-name-input" hidden>Name</label>
+        <input id="account-name-input" name="name" autocomplete="name" maxlength="80" hidden>
+        <label for="account-email">Email</label>
+        <input id="account-email" name="email" type="email" autocomplete="email" maxlength="254" required>
+        <label for="account-password">Password</label>
+        <input id="account-password" name="password" type="password" autocomplete="current-password" minlength="8" maxlength="128" required>
+        <button class="primary-action" id="account-submit" type="submit">Sign in</button>
+      </form>
+      <p class="form-status" id="account-status" role="status" aria-live="polite"></p>
+      <p class="account-switch"><span id="account-switch-prompt">New to PulseNews?</span> <button id="account-switch" type="button">Create an account</button></p>
+    </section>
+  </main>
+  <footer class="site-footer page-footer"><div class="container footer-bottom"><span>© PulseNews</span><a href="/">Back to the headlines</a></div></footer>
+</body>
+</html>

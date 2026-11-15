@@ -71,14 +71,14 @@ function safeExternalUrl(value) {
 
 function isPublishableArticle(article) {
   return Boolean(article && typeof article.title === 'string' && article.title.trim() &&
-    safeExternalUrl(article.url));
+    typeof article.description === 'string' && article.description.trim() &&
+    getValidImageUrl(article.image) && safeExternalUrl(article.url));
 }
 
 function getValidImageUrl(value) {
   try {
     const url = new URL(value);
-    if (!['https:', 'http:'].includes(url.protocol) ||
-      /(?:logo|icon|avatar|sprite|default)/i.test(url.href)) return null;
+    if (!['https:', 'http:'].includes(url.protocol)) return null;
     url.protocol = 'https:';
     return url.href;
   } catch {
@@ -103,21 +103,26 @@ function showEmptyNewsMessage(container, asListItem = false) {
   container.replaceChildren(message);
 }
 
-function watchImageLoad(image, imageLink, story) {
-  const loadingTimeout = window.setTimeout(() => {
-    if (!image.complete || image.naturalWidth === 0) {
-      imageLink.remove();
-      story.classList.add('text-only-story');
-    }
-  }, 8000);
+function removeArticleEverywhere(articleId) {
+  document.querySelectorAll('[data-article-id]').forEach((element) => {
+    if (element.dataset.articleId === articleId) element.remove();
+  });
+  filterStories();
+}
+
+function watchImageLoad(image, articleId) {
+  const loadingTimeout = image.loading === 'eager'
+    ? window.setTimeout(() => {
+      if (!image.complete || image.naturalWidth === 0) removeArticleEverywhere(articleId);
+    }, 15_000)
+    : null;
 
   image.addEventListener('load', () => {
-    window.clearTimeout(loadingTimeout);
+    if (loadingTimeout) window.clearTimeout(loadingTimeout);
   });
   image.addEventListener('error', () => {
-    window.clearTimeout(loadingTimeout);
-    imageLink.remove();
-    story.classList.add('text-only-story');
+    if (loadingTimeout) window.clearTimeout(loadingTimeout);
+    removeArticleEverywhere(articleId);
   });
 }
 
@@ -138,8 +143,8 @@ function addArticleImage(container, article, className) {
   image.loading = className.includes('lead-image') ? 'eager' : 'lazy';
   image.decoding = 'async';
   if (className.includes('lead-image')) image.fetchPriority = 'high';
-  image.referrerPolicy = 'no-referrer';
-  watchImageLoad(image, imageLink, container);
+  image.referrerPolicy = 'strict-origin-when-cross-origin';
+  watchImageLoad(image, article.id);
   imageLink.append(image);
   container.append(imageLink);
   return true;

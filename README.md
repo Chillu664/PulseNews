@@ -2,6 +2,8 @@
 
 PulseNews is a plain HTML, CSS, and browser JavaScript news site. Its Node.js server aggregates live headlines for Ghana, World, Business, Sports, and Technology from public Bing News RSS feeds without requiring an API key. Google News RSS is the fallback; GNews can optionally be selected, with free RSS sources as its fallback.
 
+The site also includes account sign-up/sign-in, a support form, and a donation page. Account passwords are hashed with Node.js scrypt and sessions use HTTP-only cookies. Accounts, sessions, and support requests are saved in `data/app-data.json` (or `DATA_DIR`); configure `DATA_DIR` to a persistent disk on your host if data must survive redeployments. Donation checkout is enabled only when `DONATION_CHECKOUT_URL` is set to your payment provider's HTTPS checkout URL.
+
 ## Run locally
 
 1. Install Node.js 18 or later.
@@ -31,9 +33,8 @@ When a separate frontend host is used, set the backend's `FRONTEND_ORIGINS` envi
 - The server caches feed results for 15 minutes by default and requests one public news feed per category. To change the interval, add `NEWS_REFRESH_INTERVAL_MS` to `.env`.
 - Headlines, summaries, and image URLs supplied by the selected news feed are collected by the backend without an API key. To prefer GNews, set `NEWS_PROVIDER=gnews` and configure `GNEWS_API_KEY`; Bing News RSS is used when GNews fails or reaches its quota, with Google News RSS as the final fallback. Articles link to the news source.
 - A timed-out RSS request is retried once before the server falls back to the next feed provider. Persistent upstream timeouts are reported rather than hidden.
-- Google News RSS links to its own article redirect pages and its RSS description is only a repeated headline/publisher wrapper; the app omits that wrapper rather than presenting it as a story summary. Google News is retained as a final headlines-only fallback.
-- Stories are returned even when they have no usable image. Only the image URL supplied by the selected news feed is considered; it must be HTTPS and have a JPG, PNG, or WebP URL without logo, icon, avatar, sprite, or default markers. The browser displays it only after it loads successfully at 600 pixels wide or more. Stories without a valid image remain as text-only cards.
-- No publisher pages are scraped for images or summaries, and there are no stock-photo or category-image fallbacks. Bing News RSS availability and image coverage vary by category and publisher, so text-only cards preserve stories that have no valid photo.
+- Google News RSS links to its own article redirect pages and its RSS description may be a repeated headline/publisher wrapper; the app omits that wrapper rather than presenting it as a story summary.
+- Only stories with a description and valid image URL are returned. The server checks publisher image metadata when a feed omits an image. The browser uses cross-origin referrers compatible with publisher hotlink checks, removes every duplicate card if its image fails, and does not keep showing broken-image placeholders.
 - If feeds are unavailable, the site displays an error and the server keeps its last successful results when available.
 - Test the local API at <http://127.0.0.1:3000/api/news>. A category can be requested at <http://127.0.0.1:3000/api/news?category=ghana>. Render checks <https://your-service.onrender.com/healthz> after deploy.
 
@@ -45,23 +46,27 @@ See [Bing News](https://www.bing.com/news), the [Google News RSS feeds](https://
 | --- | --- |
 | `index.html` | Page structure, navigation, search controls, news sections, and footer. It loads the stylesheet, public configuration, and browser script. |
 | `styles.css` | Visual theme, responsive layouts, typography, and edge-to-edge story image frames using `object-fit: cover`. |
-| `script.js` | Browser behavior: selects the API URL, fetches and renders headlines, refreshes status, filters search results, and uses text-only cards when an image is unusable. On `localhost` it uses the local server API. |
-| `server.js` | Node HTTP server and news backend. It serves the page and `/api/news`, fetches RSS or optional GNews, normalizes articles and API-provided image URLs, caches results, and exposes `/healthz`. |
+| `script.js` | Browser behavior: selects the API URL, fetches and renders headlines, refreshes status, filters search results, and removes stories whose photos fail to load. On `localhost` it uses the local server API. |
+| `server.js` | Node HTTP server, news backend, account/session API, support-message storage, static page serving, and `/healthz`. |
+| `account.html`, `account.js` | Sign-up/sign-in page and browser account flows backed by the server API. |
+| `support.html` | Support form that saves requests and returns a ticket reference. |
+| `donate.html` | Donation information page; secure checkout appears when `DONATION_CHECKOUT_URL` is configured. |
+| `data/` | Local persistent app data. Do not commit this directory; configure a persistent host disk for production data. |
 | `config.js` | Public frontend setting for the deployed API base URL. It is not a place for secrets. Localhost uses its same-origin local API. |
 | `package.json` | Project metadata, Node engine requirement, npm start/dev scripts, and runtime/development dependencies. |
 | `package-lock.json` | Exact npm dependency versions used by `npm ci` and reproducible installs. |
 | `render.yaml` | Render Blueprint settings: Node service, install/start commands, health check, and default RSS environment settings. |
 | `.env.example` | Safe template showing optional local environment variables; copy it to `.env` and add private values there if needed. |
-| `.gitignore` | Excludes installed dependencies and private `.env` files from Git while allowing `.env.example`. |
+| `.gitignore` | Excludes installed dependencies, app data, and private `.env` files from Git while allowing `.env.example`. |
 | `.env` | Local private settings, if present. Keep it secret and do not commit or share it. |
 | `node_modules/` | Installed npm packages; generated by npm and excluded from Git. |
 
 ## How the app works
 
-1. The browser loads `index.html`, `styles.css`, `config.js`, and `script.js`.
+1. The browser loads `index.html`, `styles.css`, `config.js`, and `script.js`; account, support, and donation pages use `account.js`.
 2. `script.js` requests `/api/news`. A local browser address such as `http://127.0.0.1:3000` uses the local server; a deployed page uses its same-origin API, while directly opened files can use the public URL from `config.js`.
 3. `server.js` fetches news for Ghana, World, Business, Sports, and Technology. Bing RSS is the default, Google News RSS is the fallback, and GNews is optional.
-4. Stories are kept whether or not they have a photo. The browser uses only the image URL returned by the feed and displays it only when it is HTTPS, JPG/PNG/WebP, loads, and is at least 600 pixels wide; otherwise the story remains visible as a text-only card.
+4. The API returns stories only when both summary and image are available. The browser removes duplicate cards if a publisher image fails to load.
 5. The server caches feed results for 15 minutes by default; the browser checks for updates every minute. If a refresh fails, the page reports the issue and the backend can continue serving its last successful cache.
 
 ### Local commands
