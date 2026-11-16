@@ -63,14 +63,64 @@ function getSupportEmailConfig() {
   if (!user || !password || !recipient ||
     !/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(user) ||
     !/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(recipient)) {
-    const error = new Error('Email delivery is not configured. Set GMAIL_USER and GMAIL_APP_PASSWORD in the server environment.');
+    const error = new Error('Email delivery is not configured. Set Google Apps Script delivery variables or Gmail SMTP credentials in the server environment.');
     error.statusCode = 503;
     throw error;
   }
   return { user, password, recipient };
 }
 
+async function sendViaGoogleAppsScript(ticket, endpoint, secret) {
+  const response = await fetch(endpoint, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json', Accept: 'application/json' },
+    body: JSON.stringify({ ...ticket, secret }),
+    signal: AbortSignal.timeout(15_000)
+  });
+  const responseBody = await response.text();
+  if (Buffer.byteLength(responseBody, 'utf8') > 10_000) {
+    throw new Error('Google Apps Script returned an oversized response.');
+  }
+  let result;
+  try {
+    result = JSON.parse(responseBody);
+  } catch {
+    throw new Error('Google Apps Script returned an unreadable response.');
+  }
+  if (!response.ok || !result || typeof result !== 'object' || result.ok !== true) {
+    throw new Error(result && typeof result.error === 'string'
+      ? result.error
+      : `Google Apps Script returned HTTP ${response.status}.`);
+  }
+}
+
 async function sendSupportEmail(ticket) {
+  const scriptUrl = process.env.GOOGLE_APPS_SCRIPT_URL?.trim();
+  const scriptSecret = process.env.GOOGLE_APPS_SCRIPT_SECRET?.trim();
+  if (scriptUrl || scriptSecret) {
+    if (!scriptUrl || !scriptSecret) {
+      const error = new Error('Set both GOOGLE_APPS_SCRIPT_URL and GOOGLE_APPS_SCRIPT_SECRET to enable Gmail Apps Script delivery.');
+      error.statusCode = 503;
+      throw error;
+    }
+    let endpoint;
+    try {
+      endpoint = new URL(scriptUrl);
+    } catch {
+      const error = new Error('GOOGLE_APPS_SCRIPT_URL must be a valid Google Apps Script web app URL.');
+      error.statusCode = 503;
+      throw error;
+    }
+    if (endpoint.protocol !== 'https:' || endpoint.hostname !== 'script.google.com' ||
+      !endpoint.pathname.startsWith('/macros/s/')) {
+      const error = new Error('GOOGLE_APPS_SCRIPT_URL must be an HTTPS Google Apps Script web app URL.');
+      error.statusCode = 503;
+      throw error;
+    }
+    await sendViaGoogleAppsScript(ticket, endpoint.href, scriptSecret);
+    return;
+  }
+
   const { user, password, recipient } = getSupportEmailConfig();
   if (!supportEmailTransport) {
     supportEmailTransport = nodemailer.createTransport({
