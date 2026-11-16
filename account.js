@@ -33,7 +33,7 @@ if (supportForm) {
         body: JSON.stringify(Object.fromEntries(formData))
       });
       supportForm.reset();
-      setFormStatus(supportStatus, `Message received. Your reference number is ${result.ticketId}.`);
+      setFormStatus(supportStatus, `Message emailed successfully. Your reference number is ${result.ticketId}.`);
     } catch (error) {
       setFormStatus(supportStatus, error.message, true);
     } finally {

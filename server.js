@@ -5,6 +5,7 @@ const fs = require('node:fs');
 const path = require('node:path');
 const crypto = require('node:crypto');
 const { promisify } = require('node:util');
+const nodemailer = require('nodemailer');
 
 const HOST = '0.0.0.0';
 const PORT = Number(process.env.PORT) || 3000;
@@ -53,6 +54,49 @@ let appData = { users: [], sessions: [], supportMessages: [] };
 let saveAppDataInProgress = Promise.resolve();
 let appDataLoaded = false;
 let appDataLoading = null;
+let supportEmailTransport = null;
+
+function getSupportEmailConfig() {
+  const user = process.env.GMAIL_USER?.trim().toLowerCase();
+  const password = process.env.GMAIL_APP_PASSWORD?.replace(/\s/g, '');
+  const recipient = (process.env.SUPPORT_EMAIL_TO || user || '').trim();
+  if (!user || !password || !recipient ||
+    !/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(user) ||
+    !/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(recipient)) {
+    const error = new Error('Email delivery is not configured. Set GMAIL_USER and GMAIL_APP_PASSWORD in the server environment.');
+    error.statusCode = 503;
+    throw error;
+  }
+  return { user, password, recipient };
+}
+
+async function sendSupportEmail(ticket) {
+  const { user, password, recipient } = getSupportEmailConfig();
+  if (!supportEmailTransport) {
+    supportEmailTransport = nodemailer.createTransport({
+      service: 'gmail',
+      auth: { user, pass: password },
+      connectionTimeout: 10_000,
+      greetingTimeout: 10_000,
+      socketTimeout: 20_000
+    });
+  }
+  await supportEmailTransport.sendMail({
+    from: `PulseNews Support <${user}>`,
+    to: recipient,
+    replyTo: { name: ticket.name, address: ticket.email },
+    subject: `PulseNews support: ${ticket.subject}`,
+    text: [
+      `Name: ${ticket.name}`,
+      `Email: ${ticket.email}`,
+      `Subject: ${ticket.subject}`,
+      `Reference: ${ticket.id}`,
+      `Received: ${ticket.createdAt}`,
+      '',
+      ticket.message
+    ].join('\n')
+  });
+}
 
 async function loadAppData() {
   if (appDataLoaded) return;
@@ -738,8 +782,9 @@ const server = http.createServer(async (request, response) => {
       const email = typeof body.email === 'string' ? body.email.trim().toLowerCase() : '';
       const message = typeof body.message === 'string' ? body.message.trim() : '';
       const subject = typeof body.subject === 'string' ? body.subject.trim() : 'General support';
-      if (!name || name.length > 80 || !/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(email) || email.length > 254 ||
-        !message || message.length > 5000 || !subject || subject.length > 120) {
+      if (!name || /[\r\n]/.test(name) || name.length > 80 ||
+        !/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(email) || email.length > 254 ||
+        !message || message.length > 5000 || !subject || /[\r\n]/.test(subject) || subject.length > 120) {
         sendJson(response, 400, { error: 'Please provide a name, valid email, subject, and message under 5,000 characters.' });
         return;
       }
@@ -754,7 +799,17 @@ const server = http.createServer(async (request, response) => {
       appData.supportMessages.push(ticket);
       appData.supportMessages = appData.supportMessages.slice(-5000);
       await saveAppData();
-      sendJson(response, 201, { received: true, ticketId: ticket.id });
+      try {
+        await sendSupportEmail(ticket);
+      } catch (error) {
+        console.error(`Support email delivery failed for ticket ${ticket.id}: ${error.message}`);
+        const statusCode = Number.isInteger(error.statusCode) ? error.statusCode : 502;
+        sendJson(response, statusCode, {
+          error: `Your request was saved as ticket ${ticket.id}, but could not be emailed. Please try again later.`
+        });
+        return;
+      }
+      sendJson(response, 201, { received: true, ticketId: ticket.id, emailed: true });
       return;
     }
     if (url.pathname === '/api/support') {
