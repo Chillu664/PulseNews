@@ -15,3 +15,7 @@ services:
         sync: false
       - key: GOOGLE_APPS_SCRIPT_SECRET
         sync: false
+      - key: FLUTTERWAVE_PUBLIC_KEY
+        sync: false
+      - key: FLUTTERWAVE_SECRET_KEY
+        sync: false

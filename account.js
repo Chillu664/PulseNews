@@ -1,6 +1,16 @@
+const configuredApiBaseUrl = typeof window.PULSENEWS_API_BASE_URL === 'string'
+  ? window.PULSENEWS_API_BASE_URL.trim().replace(/\/+$/, '')
+  : '';
+const localServerMode = ['localhost', '127.0.0.1'].includes(window.location.hostname);
+const apiBaseUrl = localServerMode ? '' : configuredApiBaseUrl;
+
 async function requestJson(url, options = {}) {
-  const response = await fetch(url, {
+  const requestUrl = apiBaseUrl
+    ? `${apiBaseUrl}${url.startsWith('/') ? url : `/${url}`}`
+    : url;
+  const response = await fetch(requestUrl, {
     ...options,
+    credentials: 'include',
     headers: { 'Content-Type': 'application/json', ...options.headers }
   });
   let result;
@@ -120,18 +130,77 @@ if (accountForm) {
     .catch((error) => setFormStatus(accountStatus, error.message, true));
 }
 
-const donationLink = document.querySelector('#donation-checkout');
-if (donationLink) {
+const donationForm = document.querySelector('#donation-form');
+if (donationForm) {
   const donationStatus = document.querySelector('#donation-status');
+  const donationButton = document.querySelector('#donation-checkout');
   requestJson('/api/donation')
-    .then(({ checkoutUrl }) => {
-      if (!checkoutUrl) {
-        setFormStatus(donationStatus, 'Secure checkout is not configured yet. Contact us if you would like to support PulseNews.');
+    .then(({ enabled }) => {
+      if (!enabled) {
+        setFormStatus(donationStatus, 'Mobile Money checkout is not configured yet. The MTN number is +233551539602.');
         return;
       }
-      donationLink.href = checkoutUrl;
-      donationLink.hidden = false;
-      setFormStatus(donationStatus, 'Your contribution will be processed by our secure payment provider.');
+      setFormStatus(donationStatus, 'Secure MTN Mobile Money checkout is ready.');
     })
     .catch((error) => setFormStatus(donationStatus, error.message, true));
+
+  donationForm.addEventListener('submit', async (event) => {
+    event.preventDefault();
+    if (typeof window.FlutterwaveCheckout !== 'function') {
+      setFormStatus(donationStatus, 'The secure checkout could not load. Refresh the page and try again.', true);
+      return;
+    }
+    const formData = new FormData(donationForm);
+    const amount = Number(formData.get('amount'));
+    const name = String(formData.get('name') || '').trim();
+    const email = String(formData.get('email') || '').trim();
+    donationButton.disabled = true;
+    setFormStatus(donationStatus, 'Preparing secure checkout…');
+    try {
+      const prepared = await requestJson('/api/donation/init', {
+        method: 'POST',
+        body: JSON.stringify({ amount, name, email })
+      });
+      window.FlutterwaveCheckout({
+        public_key: prepared.publicKey,
+        tx_ref: prepared.txRef,
+        amount: prepared.amount,
+        currency: 'GHS',
+        payment_options: 'mobilemoneyghana',
+        customer: {
+          email: email || 'donor@pulsenews.app',
+          name: name || 'PulseNews supporter'
+        },
+        customizations: {
+          title: 'PulseNews Donation',
+          description: 'Support PulseNews independent journalism',
+          logo: `${window.location.origin}/favicon.ico`
+        },
+        callback: async (response) => {
+          if (response.status !== 'successful') {
+            setFormStatus(donationStatus, 'Payment was cancelled or not completed.', true);
+            donationButton.disabled = false;
+            return;
+          }
+          setFormStatus(donationStatus, 'Verifying your payment…');
+          try {
+            await requestJson('/api/donation/verify', {
+              method: 'POST',
+              body: JSON.stringify({ transactionId: response.transaction_id, txRef: prepared.txRef })
+            });
+            setFormStatus(donationStatus, `Thank you. Your GHS ${prepared.amount.toFixed(2)} donation was received.`);
+            donationForm.reset();
+          } catch (error) {
+            setFormStatus(donationStatus, error.message, true);
+          } finally {
+            donationButton.disabled = false;
+          }
+        },
+        onclose: () => donationButton.disabled = false
+      });
+    } catch (error) {
+      setFormStatus(donationStatus, error.message, true);
+      donationButton.disabled = false;
+    }
+  });
 }

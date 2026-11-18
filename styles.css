@@ -393,6 +393,8 @@ h1, h2, h3 { font-family: var(--serif); font-weight: 400; }
 .secondary-action { margin-top: 15px; border-color: var(--rule); background: transparent; color: var(--text); }
 .secondary-action:hover { border-color: var(--signal); color: var(--signal); }
 .page-form .primary-action { margin-top: 14px; }
+.donation-panel .page-form { margin-top: 16px; }
+.donation-panel #donation-checkout { margin-top: 18px; }
 .primary-action:disabled, .secondary-action:disabled { cursor: wait; opacity: .6; }
 .form-status { min-height: 1.65em; margin: 8px 0 0; color: var(--signal); font-size: 12px; overflow-wrap: anywhere; }
 .form-status.error { color: #f08a8a; }

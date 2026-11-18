@@ -50,7 +50,7 @@ const categories = [
 let cachedNews = null;
 let lastFetchAt = 0;
 let refreshInProgress = null;
-let appData = { users: [], sessions: [], supportMessages: [] };
+let appData = { users: [], sessions: [], supportMessages: [], donations: [] };
 let saveAppDataInProgress = Promise.resolve();
 let appDataLoaded = false;
 let appDataLoading = null;
@@ -157,7 +157,8 @@ async function loadAppData() {
         appData = {
           users: Array.isArray(savedData.users) ? savedData.users : [],
           sessions: Array.isArray(savedData.sessions) ? savedData.sessions : [],
-          supportMessages: Array.isArray(savedData.supportMessages) ? savedData.supportMessages : []
+          supportMessages: Array.isArray(savedData.supportMessages) ? savedData.supportMessages : [],
+          donations: Array.isArray(savedData.donations) ? savedData.donations : []
         };
       } catch (error) {
         if (error.code !== 'ENOENT') throw error;
@@ -791,14 +792,15 @@ function applyApiCors(request, response) {
   response.setHeader('Vary', 'Origin');
   if (typeof origin === 'string' && FRONTEND_ORIGINS.has(origin)) {
     response.setHeader('Access-Control-Allow-Origin', origin);
-    response.setHeader('Access-Control-Allow-Methods', 'GET, OPTIONS');
+    response.setHeader('Access-Control-Allow-Credentials', 'true');
+    response.setHeader('Access-Control-Allow-Methods', 'GET, POST, OPTIONS');
     response.setHeader('Access-Control-Allow-Headers', 'Content-Type');
   }
 }
 
 const server = http.createServer(async (request, response) => {
   const url = new URL(request.url, `http://${HOST}:${PORT}`);
-  if (url.pathname === '/api/news') {
+  if (url.pathname.startsWith('/api/')) {
     applyApiCors(request, response);
     if (request.method === 'OPTIONS') {
       if (request.headers.origin && !FRONTEND_ORIGINS.has(request.headers.origin)) {
@@ -806,7 +808,11 @@ const server = http.createServer(async (request, response) => {
         response.end();
         return;
       }
-      response.writeHead(204, { Allow: 'GET, OPTIONS' });
+      response.writeHead(204, {
+        Allow: 'GET, POST, OPTIONS',
+        'Access-Control-Allow-Methods': 'GET, POST, OPTIONS',
+        'Access-Control-Allow-Headers': 'Content-Type'
+      });
       response.end();
       return;
     }
@@ -868,14 +874,91 @@ const server = http.createServer(async (request, response) => {
       return;
     }
     if (url.pathname === '/api/donation' && request.method === 'GET') {
-      let checkoutUrl = '';
-      try {
-        const configuredUrl = new URL(process.env.DONATION_CHECKOUT_URL || '');
-        if (configuredUrl.protocol === 'https:') checkoutUrl = configuredUrl.href;
-      } catch {
-        checkoutUrl = '';
+      const publicKey = process.env.FLUTTERWAVE_PUBLIC_KEY?.trim() || '';
+      sendJson(response, 200, {
+        publicKey,
+        enabled: Boolean(publicKey && process.env.FLUTTERWAVE_SECRET_KEY?.trim()),
+        mtnNumber: '+233551539602'
+      });
+      return;
+    }
+    if (url.pathname === '/api/donation/init' && request.method === 'POST') {
+      await loadAppData();
+      const body = await readJsonBody(request);
+      const amount = Number(body.amount);
+      const name = typeof body.name === 'string' ? body.name.trim().slice(0, 80) : '';
+      const email = typeof body.email === 'string' ? body.email.trim().toLowerCase().slice(0, 254) : '';
+      if (!Number.isFinite(amount) || amount < 1 || amount > 100000) {
+        sendJson(response, 400, { error: 'Enter a donation amount from GHS 1 to GHS 100,000.' });
+        return;
       }
-      sendJson(response, 200, { checkoutUrl });
+      if (email && !/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(email)) {
+        sendJson(response, 400, { error: 'Enter a valid email address.' });
+        return;
+      }
+      const publicKey = process.env.FLUTTERWAVE_PUBLIC_KEY?.trim();
+      const secretKey = process.env.FLUTTERWAVE_SECRET_KEY?.trim();
+      if (!publicKey || !secretKey) {
+        sendJson(response, 503, { error: 'Mobile Money payments are not configured yet.' });
+        return;
+      }
+      const txRef = `PN-${crypto.randomUUID()}`;
+      appData.donations.push({
+        txRef,
+        amount: Math.round(amount * 100) / 100,
+        name,
+        email,
+        status: 'pending',
+        createdAt: new Date().toISOString()
+      });
+      appData.donations = appData.donations.slice(-5000);
+      await saveAppData();
+      sendJson(response, 201, { txRef, amount: Math.round(amount * 100) / 100, publicKey });
+      return;
+    }
+    if (url.pathname === '/api/donation/verify' && request.method === 'POST') {
+      await loadAppData();
+      const body = await readJsonBody(request);
+      const transactionId = typeof body.transactionId === 'number' ? body.transactionId : Number(body.transactionId);
+      const txRef = typeof body.txRef === 'string' ? body.txRef.trim() : '';
+      const secretKey = process.env.FLUTTERWAVE_SECRET_KEY?.trim();
+      if (!secretKey || !Number.isInteger(transactionId) || !txRef) {
+        sendJson(response, 400, { error: 'Invalid donation verification details.' });
+        return;
+      }
+      const donation = appData.donations.find((item) => item.txRef === txRef && item.status !== 'failed');
+      if (!donation) {
+        sendJson(response, 404, { error: 'Donation transaction was not found.' });
+        return;
+      }
+      let verification;
+      try {
+        const responseFromProvider = await fetch(`https://api.flutterwave.com/v3/transactions/${transactionId}/verify`, {
+          headers: { Authorization: `Bearer ${secretKey}` },
+          signal: AbortSignal.timeout(15_000)
+        });
+        verification = await responseFromProvider.json();
+      } catch {
+        sendJson(response, 502, { error: 'The payment result could not be verified. Please try again.' });
+        return;
+      }
+      const data = verification?.data;
+      const verified = verification?.status === 'success' &&
+        data?.status === 'successful' &&
+        data?.tx_ref === txRef &&
+        data?.currency === 'GHS' &&
+        Number(data?.amount) === Number(donation.amount);
+      if (!verified) {
+        donation.status = 'failed';
+        await saveAppData();
+        sendJson(response, 400, { error: 'Payment was not successful or could not be verified.' });
+        return;
+      }
+      donation.status = 'successful';
+      donation.transactionId = transactionId;
+      donation.verifiedAt = new Date().toISOString();
+      await saveAppData();
+      sendJson(response, 200, { verified: true, amount: donation.amount, txRef });
       return;
     }
   } catch (error) {

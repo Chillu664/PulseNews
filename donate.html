@@ -7,6 +7,8 @@
   <meta name="description" content="Support independent PulseNews journalism.">
   <title>Support PulseNews — Donate</title>
   <link rel="stylesheet" href="/styles.css">
+  <script src="/config.js"></script>
+  <script src="https://checkout.flutterwave.com/v3.js" defer></script>
   <script src="/account.js" defer></script>
 </head>
 <body>
@@ -23,9 +25,17 @@
     <p class="page-intro">Your support helps PulseNews make Ghana and world headlines easier to follow. Contributions are optional and never affect our coverage.</p>
     <section class="page-panel donation-panel" aria-labelledby="donation-title">
       <h2 id="donation-title">Support PulseNews</h2>
-      <p>Choose a contribution amount on our secure checkout page. PulseNews never collects or stores your payment-card details.</p>
-      <a class="primary-action" id="donation-checkout" href="#" hidden target="_blank" rel="noopener noreferrer">Continue to secure checkout</a>
-      <p id="donation-status" class="form-status" role="status" aria-live="polite">Checking donation availability…</p>
+      <p>Choose an amount and pay securely with MTN Mobile Money through Flutterwave.</p>
+      <form class="page-form" id="donation-form">
+        <label for="donation-name">Name <span aria-hidden="true">(optional)</span></label>
+        <input id="donation-name" name="name" autocomplete="name" maxlength="80">
+        <label for="donation-email">Email <span aria-hidden="true">(optional)</span></label>
+        <input id="donation-email" name="email" type="email" autocomplete="email" maxlength="254">
+        <label for="donation-amount">Amount (GHS)</label>
+        <input id="donation-amount" name="amount" type="number" min="1" step="0.01" value="10" required>
+        <button class="primary-action" id="donation-checkout" type="submit">Pay securely with Mobile Money</button>
+      </form>
+      <p id="donation-status" class="form-status" role="status" aria-live="polite">Checking Mobile Money availability…</p>
       <a class="secondary-action" href="/support">Contact us about giving</a>
     </section>
   </main>
