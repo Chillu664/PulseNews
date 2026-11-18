@@ -154,12 +154,13 @@ if (donationForm) {
     const amount = Number(formData.get('amount'));
     const name = String(formData.get('name') || '').trim();
     const email = String(formData.get('email') || '').trim();
+    const phone = String(formData.get('phone') || '').trim();
     donationButton.disabled = true;
     setFormStatus(donationStatus, 'Preparing secure checkout…');
     try {
       const prepared = await requestJson('/api/donation/init', {
         method: 'POST',
-        body: JSON.stringify({ amount, name, email })
+        body: JSON.stringify({ amount, name, email, phone })
       });
       window.FlutterwaveCheckout({
         public_key: prepared.publicKey,
@@ -169,7 +170,8 @@ if (donationForm) {
         payment_options: 'mobilemoneyghana',
         customer: {
           email: email || 'donor@pulsenews.app',
-          name: name || 'PulseNews supporter'
+          name: name || 'PulseNews supporter',
+          phonenumber: prepared.phone
         },
         customizations: {
           title: 'PulseNews Donation',

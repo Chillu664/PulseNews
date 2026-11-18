@@ -787,6 +787,13 @@ function sendJson(response, status, body) {
   response.end(JSON.stringify(body));
 }
 
+function normalizeMtnGhanaPhone(value) {
+  const digits = typeof value === 'string' ? value.replace(/\D/g, '') : '';
+  const localNumber = digits.startsWith('233') ? `0${digits.slice(3)}` : digits;
+  if (!/^0(?:24|25|53|54|55|59)\d{7}$/.test(localNumber)) return '';
+  return `+233${localNumber.slice(1)}`;
+}
+
 function applyApiCors(request, response) {
   const origin = request.headers.origin;
   response.setHeader('Vary', 'Origin');
@@ -888,8 +895,13 @@ const server = http.createServer(async (request, response) => {
       const amount = Number(body.amount);
       const name = typeof body.name === 'string' ? body.name.trim().slice(0, 80) : '';
       const email = typeof body.email === 'string' ? body.email.trim().toLowerCase().slice(0, 254) : '';
+      const phone = normalizeMtnGhanaPhone(body.phone);
       if (!Number.isFinite(amount) || amount < 1 || amount > 100000) {
         sendJson(response, 400, { error: 'Enter a donation amount from GHS 1 to GHS 100,000.' });
+        return;
+      }
+      if (!phone) {
+        sendJson(response, 400, { error: 'Enter a Ghana MTN number, for example 024 123 4567.' });
         return;
       }
       if (email && !/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(email)) {
@@ -913,7 +925,7 @@ const server = http.createServer(async (request, response) => {
       });
       appData.donations = appData.donations.slice(-5000);
       await saveAppData();
-      sendJson(response, 201, { txRef, amount: Math.round(amount * 100) / 100, publicKey });
+      sendJson(response, 201, { txRef, amount: Math.round(amount * 100) / 100, publicKey, phone });
       return;
     }
     if (url.pathname === '/api/donation/verify' && request.method === 'POST') {
