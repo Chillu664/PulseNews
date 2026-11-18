@@ -31,12 +31,9 @@
         <input id="donation-name" name="name" autocomplete="name" maxlength="80">
         <label for="donation-email">Email <span aria-hidden="true">(optional)</span></label>
         <input id="donation-email" name="email" type="email" autocomplete="email" maxlength="254">
-        <label for="donation-phone">Your MTN number</label>
-        <input id="donation-phone" name="phone" type="tel" autocomplete="tel" inputmode="tel" placeholder="024 123 4567" aria-describedby="donation-phone-hint" required>
-        <small id="donation-phone-hint">Use your own Ghana MTN number to approve the payment.</small>
         <label for="donation-amount">Amount (GHS)</label>
         <input id="donation-amount" name="amount" type="number" min="1" step="0.01" value="10" required>
-        <button class="primary-action" id="donation-checkout" type="submit">Pay with MTN Mobile Money</button>
+        <button class="primary-action" id="donation-checkout" type="submit">Pay securely with Mobile Money</button>
       </form>
       <p id="donation-status" class="form-status" role="status" aria-live="polite">Checking Mobile Money availability…</p>
       <a class="secondary-action" href="/support">Contact us about giving</a>
