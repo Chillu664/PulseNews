@@ -3,8 +3,12 @@
 <head>
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1">
-  <meta name="theme-color" content="#111111">
-  <meta name="description" content="PulseNews — Ghana and world news.">
+  <meta name="theme-color" content="#09110f">
+  <meta name="description" content="PulseNews brings live Ghana, world, business, sports and technology news together in one focused edition.">
+  <meta property="og:type" content="website">
+  <meta property="og:title" content="PulseNews — Ghana and the world, in focus">
+  <meta property="og:description" content="Live Ghana and international headlines, updated throughout the day.">
+  <meta name="twitter:card" content="summary_large_image">
   <title>PulseNews — Ghana and the world, in focus</title>
   <link rel="stylesheet" href="styles.css">
   <script src="config.js"></script>
@@ -48,7 +52,7 @@
     <div class="search-panel" id="search-panel" hidden>
       <div class="container search-inner">
         <label class="sr-only" for="news-search">Search news</label>
-        <input id="news-search" type="search" placeholder="Search headlines, topics and sections">
+        <input id="news-search" type="search" placeholder="Search headlines, topics and sections" aria-describedby="search-status" autocomplete="off">
         <button type="button" id="clear-search">Clear</button>
         <span class="search-hint">Search live headlines</span>
       </div>

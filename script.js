@@ -45,19 +45,33 @@ searchToggle.addEventListener('click', () => {
 function filterStories() {
   const query = searchInput.value.trim().toLowerCase();
   const stories = [...document.querySelectorAll('.story')];
-  let visibleCount = 0;
+  const visibleArticleIds = new Set();
 
   stories.forEach((story) => {
     const searchableText = `${story.textContent} ${story.dataset.search || ''}`.toLowerCase();
     const matches = !query || searchableText.includes(query);
     story.hidden = !matches;
-    if (matches) visibleCount += 1;
+    if (matches) visibleArticleIds.add(story.dataset.articleId || searchableText);
   });
+  const visibleCount = visibleArticleIds.size;
 
-  searchStatus.hidden = !query || visibleCount > 0;
-  searchStatus.textContent = query && visibleCount === 0
-    ? 'No headlines match your search. Try another topic.'
-    : '';
+  searchStatus.hidden = !query;
+  if (!query) {
+    searchStatus.textContent = '';
+  } else if (visibleCount === 0) {
+    searchStatus.textContent = `No headlines match “${searchInput.value.trim()}”. Try another topic.`;
+  } else {
+    const noun = visibleCount === 1 ? 'headline' : 'headlines';
+    searchStatus.textContent = `${visibleCount} ${noun} match “${searchInput.value.trim()}”.`;
+  }
+
+  const url = new URL(window.location.href);
+  if (query) {
+    url.searchParams.set('q', searchInput.value.trim());
+  } else {
+    url.searchParams.delete('q');
+  }
+  window.history.replaceState({}, '', `${url.pathname}${url.search}${url.hash}`);
 }
 
 function safeExternalUrl(value) {
@@ -163,7 +177,7 @@ function addArticleCategory(container, article) {
 function createArticleCard(article) {
   if (!isPublishableArticle(article)) return null;
   const story = document.createElement('article');
-  story.className = 'topic-story story';
+  story.className = 'topic-story story news-card';
   story.dataset.articleId = article.id;
   story.dataset.search = `${article.categoryLabel} ${article.title} ${article.description} ${article.source}`;
 
@@ -408,6 +422,17 @@ clearSearch.addEventListener('click', () => {
   searchInput.focus();
 });
 
+document.addEventListener('keydown', (event) => {
+  const target = event.target;
+  if (event.key === '/' &&
+    !event.metaKey && !event.ctrlKey && !event.altKey &&
+    !(target instanceof HTMLInputElement) &&
+    !(target instanceof HTMLTextAreaElement)) {
+    event.preventDefault();
+    setSearchOpen(true);
+  }
+});
+
 menuToggle.addEventListener('click', () => {
   const open = menuToggle.getAttribute('aria-expanded') !== 'true';
   menuToggle.setAttribute('aria-expanded', String(open));
@@ -434,6 +459,13 @@ document.addEventListener('keydown', (event) => {
     menuToggle.setAttribute('aria-label', 'Open navigation');
   }
 });
+
+const initialSearchQuery = new URL(window.location.href).searchParams.get('q');
+if (initialSearchQuery) {
+  searchInput.value = initialSearchQuery;
+  setSearchOpen(true);
+  filterStories();
+}
 
 document.querySelector('#today-date').textContent = new Intl.DateTimeFormat('en-GH', {
   dateStyle: 'full',
