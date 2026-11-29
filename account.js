@@ -90,6 +90,7 @@ if (accountForm) {
         method: 'POST',
         body: JSON.stringify(Object.fromEntries(formData))
       });
+      setFormStatus(accountStatus, '');
       accountForm.hidden = true;
       document.querySelector('#account-name').textContent = result.user.name;
       accountSession.hidden = false;
